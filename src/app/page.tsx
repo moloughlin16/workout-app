@@ -1,25 +1,104 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 // The four martial arts disciplines we want to track.
-// Storing them in an array means we don't have to copy-paste button code four times.
+// `key` is what we store in the database; `label` is what we show on the button.
+// Must match the `check` constraint in the martial_arts_sessions table.
 const DISCIPLINES = [
-  { key: "mma", label: "MMA", emoji: "🥋" },
-  { key: "kickboxing", label: "Kickboxing", emoji: "🥊" },
-  { key: "bjj", label: "Grappling", emoji: "🤼" },
-  { key: "sparring", label: "Sparring", emoji: "⚡" },
+  { key: "MMA", label: "MMA", emoji: "🥋" },
+  { key: "Kickboxing", label: "Kickboxing", emoji: "🥊" },
+  { key: "Grappling", label: "Grappling", emoji: "🤼" },
+  { key: "Sparring", label: "Sparring", emoji: "⚡" },
 ] as const;
 
-export default function Home() {
-  // `useState` is a React "hook" that gives us a variable that re-renders the
-  // page whenever it changes. Here we're using it to track the most recent tap
-  // so we can show a little confirmation message.
-  const [lastLogged, setLastLogged] = useState<string | null>(null);
+// Goal: 10 hours per week of martial arts.
+const WEEKLY_HOURS_GOAL = 10;
 
-  function handleLog(label: string) {
-    setLastLogged(label);
-    // TODO: later, this will actually save to Supabase.
+// Shape of one row in the martial_arts_sessions table.
+// This is a TypeScript "type" — a compile-time description of what the data looks like.
+type Session = {
+  id: string;
+  date: string;
+  discipline: string;
+  duration_min: number;
+  notes: string | null;
+  created_at: string;
+};
+
+export default function Home() {
+  // State variables. Each call to useState gives us [value, setter].
+  const [lastLogged, setLastLogged] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [weekSessions, setWeekSessions] = useState<Session[]>([]);
+  const [loadingSessions, setLoadingSessions] = useState(true);
+
+  // Fetch this week's sessions when the page first loads.
+  // useEffect runs side effects (like data fetching) after render.
+  // The empty [] dependency array means "only run once, on mount".
+  useEffect(() => {
+    loadWeekSessions();
+  }, []);
+
+  // Returns YYYY-MM-DD for the Monday of the current week.
+  function startOfWeek(): string {
+    const now = new Date();
+    const day = now.getDay(); // 0=Sun, 1=Mon, ... 6=Sat
+    const diff = day === 0 ? -6 : 1 - day; // how many days back to Monday
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + diff);
+    monday.setHours(0, 0, 0, 0);
+    return monday.toISOString().slice(0, 10); // "YYYY-MM-DD"
+  }
+
+  async function loadWeekSessions() {
+    setLoadingSessions(true);
+    const { data, error } = await supabase
+      .from("martial_arts_sessions")
+      .select("*")
+      .gte("date", startOfWeek())
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      setErrorMsg(`Failed to load sessions: ${error.message}`);
+    } else {
+      setWeekSessions(data ?? []);
+    }
+    setLoadingSessions(false);
+  }
+
+  async function handleLog(discipline: string) {
+    setSaving(true);
+    setErrorMsg(null);
+
+    const { error } = await supabase
+      .from("martial_arts_sessions")
+      .insert({ discipline });
+    // Note: we don't pass date/duration_min — the database defaults
+    // to today and 60 minutes. Keeps the tap flow to one click.
+
+    if (error) {
+      setErrorMsg(`Failed to save: ${error.message}`);
+    } else {
+      setLastLogged(discipline);
+      // Refresh the week total so the counter updates immediately.
+      await loadWeekSessions();
+    }
+    setSaving(false);
+  }
+
+  // Derived values — computed from state, not stored separately.
+  const weekMinutes = weekSessions.reduce((sum, s) => sum + s.duration_min, 0);
+  const weekHours = weekMinutes / 60;
+  const goalPercent = Math.min(100, (weekHours / WEEKLY_HOURS_GOAL) * 100);
+
+  // Count sessions per discipline for the breakdown.
+  const countsByDiscipline: Record<string, number> = {};
+  for (const s of weekSessions) {
+    countsByDiscipline[s.discipline] =
+      (countsByDiscipline[s.discipline] ?? 0) + 1;
   }
 
   return (
@@ -31,12 +110,50 @@ export default function Home() {
         </p>
       </header>
 
-      <section className="grid grid-cols-2 gap-4 mt-4">
+      {/* Weekly progress panel */}
+      <section className="mb-6 p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm font-medium text-zinc-500">This week</h2>
+          <span className="text-sm text-zinc-500">
+            Goal: {WEEKLY_HOURS_GOAL}h
+          </span>
+        </div>
+        <div className="mt-2 text-3xl font-bold">
+          {weekHours.toFixed(1)}h{" "}
+          <span className="text-base font-normal text-zinc-500">
+            ({weekSessions.length} classes)
+          </span>
+        </div>
+        {/* Progress bar */}
+        <div className="mt-3 h-2 w-full rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
+          <div
+            className="h-full bg-green-500 transition-all duration-500"
+            style={{ width: `${goalPercent}%` }}
+          />
+        </div>
+        {/* Per-discipline breakdown */}
+        {weekSessions.length > 0 && (
+          <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
+            {DISCIPLINES.map((d) => (
+              <span key={d.key}>
+                {d.emoji} {d.label}: {countsByDiscipline[d.key] ?? 0}
+              </span>
+            ))}
+          </div>
+        )}
+        {loadingSessions && (
+          <p className="mt-2 text-xs text-zinc-500">Loading…</p>
+        )}
+      </section>
+
+      {/* Quick-log buttons */}
+      <section className="grid grid-cols-2 gap-4">
         {DISCIPLINES.map((d) => (
           <button
             key={d.key}
-            onClick={() => handleLog(d.label)}
-            className="aspect-square rounded-2xl bg-white dark:bg-zinc-900 shadow-sm border border-zinc-200 dark:border-zinc-800 flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform"
+            onClick={() => handleLog(d.key)}
+            disabled={saving}
+            className="aspect-square rounded-2xl bg-white dark:bg-zinc-900 shadow-sm border border-zinc-200 dark:border-zinc-800 flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-50 disabled:active:scale-100"
           >
             <span className="text-4xl">{d.emoji}</span>
             <span className="text-lg font-semibold">{d.label}</span>
@@ -44,9 +161,20 @@ export default function Home() {
         ))}
       </section>
 
-      {lastLogged && (
-        <div className="mt-8 p-4 rounded-xl bg-green-100 dark:bg-green-900/30 text-green-900 dark:text-green-200 text-center">
-          Logged {lastLogged} ✓ (not yet saved to database)
+      {/* Feedback banners */}
+      {saving && (
+        <div className="mt-6 p-4 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-center text-sm">
+          Saving…
+        </div>
+      )}
+      {lastLogged && !saving && !errorMsg && (
+        <div className="mt-6 p-4 rounded-xl bg-green-100 dark:bg-green-900/30 text-green-900 dark:text-green-200 text-center">
+          Logged {lastLogged} ✓
+        </div>
+      )}
+      {errorMsg && (
+        <div className="mt-6 p-4 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-900 dark:text-red-200 text-center text-sm">
+          {errorMsg}
         </div>
       )}
     </main>
