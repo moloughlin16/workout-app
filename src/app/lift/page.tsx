@@ -14,6 +14,10 @@ type ExerciseDef = {
   targetSets: number;
   targetReps: string; // string because ranges like "3-5" are common
   note?: string;
+  // Unit for the second field. Defaults to "reps". Set to "sec" for time-based
+  // holds like plank — the placeholder + history label change accordingly.
+  // The DB column is still `reps` (an integer); we just relabel it in the UI.
+  unit?: "reps" | "sec";
 };
 
 type Template = {
@@ -32,7 +36,8 @@ const TEMPLATES: Template[] = [
       { name: "Chest-Supported Row", targetSets: 3, targetReps: "6-10" },
       { name: "Bulgarian Split Squat", targetSets: 3, targetReps: "6-8 ea" },
       { name: "Step-ups", targetSets: 3, targetReps: "6-10 ea", note: "bodyweight, controlled" },
-      { name: "Hanging Leg Raises (or Plank)", targetSets: 3, targetReps: "max" },
+      { name: "Deadbugs", targetSets: 3, targetReps: "8-12 ea", note: "slow, full extension" },
+      { name: "Plank", targetSets: 3, targetReps: "max", unit: "sec" },
       { name: "Hip Abduction (optional)", targetSets: 2, targetReps: "12-15" },
     ],
   },
@@ -40,14 +45,16 @@ const TEMPLATES: Template[] = [
     name: "Day B",
     subtitle: "Power — explosive, upper-body bias",
     exercises: [
-      { name: "Box Jumps (or KB Swings)", targetSets: 4, targetReps: "5-8", note: "full recovery" },
+      { name: "Box Jumps", targetSets: 4, targetReps: "5-8", note: "full recovery" },
+      { name: "Kettlebell Swings", targetSets: 4, targetReps: "8-12", note: "hip hinge, explosive" },
       { name: "RDL (or SLDL)", targetSets: 3, targetReps: "5-8" },
       { name: "Overhead Press", targetSets: 3, targetReps: "5-8" },
       { name: "Row (DB or cable)", targetSets: 3, targetReps: "6-10" },
       { name: "Lateral Raises", targetSets: 3, targetReps: "12-15" },
       { name: "Face Pulls / Rear Delts", targetSets: 3, targetReps: "12-15" },
       { name: "Hamstring Curls", targetSets: 3, targetReps: "8-12" },
-      { name: "Curls or Pushdowns (optional)", targetSets: 2, targetReps: "10-15" },
+      { name: "Bicep Curls (optional)", targetSets: 2, targetReps: "10-15" },
+      { name: "Tricep Pushdowns (optional)", targetSets: 2, targetReps: "10-15" },
     ],
   },
 ];
@@ -406,7 +413,8 @@ export default function LiftPage() {
               )}
               {last ? (
                 <p className="text-xs text-green-700 dark:text-green-400 mt-1">
-                  Last: {last.weight_lb ?? "–"} lb × {last.reps ?? "–"}
+                  Last: {last.weight_lb ?? "BW"} lb × {last.reps ?? "–"}{" "}
+                  {ex.unit === "sec" ? "sec" : ""}
                 </p>
               ) : (
                 <p className="text-xs text-zinc-400 mt-1">No history yet</p>
@@ -431,7 +439,7 @@ export default function LiftPage() {
                     <input
                       type="number"
                       inputMode="numeric"
-                      placeholder="reps"
+                      placeholder={ex.unit === "sec" ? "sec" : "reps"}
                       value={s.reps}
                       onChange={(e) => updateSet(ex.name, idx, "reps", e.target.value)}
                       className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-sm"
