@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { todayLocal, startOfWeekLocal, relativeLabel } from "@/lib/date";
 
 // The four martial arts disciplines we want to track.
 // `key` is what we store in the database; `label` is what we show on the button.
@@ -28,37 +29,28 @@ type Session = {
 };
 
 export default function Home() {
-  // State variables. Each call to useState gives us [value, setter].
+  // State variables.
   const [lastLogged, setLastLogged] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [weekSessions, setWeekSessions] = useState<Session[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
 
+  // The date we're logging FOR. Defaults to today.
+  // Changing this lets the user log a class they missed logging earlier.
+  const [logDate, setLogDate] = useState<string>(todayLocal());
+
   // Fetch this week's sessions when the page first loads.
-  // useEffect runs side effects (like data fetching) after render.
-  // The empty [] dependency array means "only run once, on mount".
   useEffect(() => {
     loadWeekSessions();
   }, []);
-
-  // Returns YYYY-MM-DD for the Monday of the current week.
-  function startOfWeek(): string {
-    const now = new Date();
-    const day = now.getDay(); // 0=Sun, 1=Mon, ... 6=Sat
-    const diff = day === 0 ? -6 : 1 - day; // how many days back to Monday
-    const monday = new Date(now);
-    monday.setDate(now.getDate() + diff);
-    monday.setHours(0, 0, 0, 0);
-    return monday.toISOString().slice(0, 10); // "YYYY-MM-DD"
-  }
 
   async function loadWeekSessions() {
     setLoadingSessions(true);
     const { data, error } = await supabase
       .from("martial_arts_sessions")
       .select("*")
-      .gte("date", startOfWeek())
+      .gte("date", startOfWeekLocal())
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -73,11 +65,12 @@ export default function Home() {
     setSaving(true);
     setErrorMsg(null);
 
+    // Explicitly send the logDate so we can log for a past day.
+    // If logDate === today, this is the same as omitting it (the
+    // DB default is current_date) — but being explicit is clearer.
     const { error } = await supabase
       .from("martial_arts_sessions")
-      .insert({ discipline });
-    // Note: we don't pass date/duration_min — the database defaults
-    // to today and 60 minutes. Keeps the tap flow to one click.
+      .insert({ discipline, date: logDate });
 
     if (error) {
       setErrorMsg(`Failed to save: ${error.message}`);
@@ -88,6 +81,33 @@ export default function Home() {
     }
     setSaving(false);
   }
+
+  async function handleDelete(id: string) {
+    if (!confirm("Delete this class?")) return;
+
+    // Optimistic update: remove from UI immediately for snappy feel.
+    const previous = weekSessions;
+    setWeekSessions((curr) => curr.filter((s) => s.id !== id));
+
+    const { error } = await supabase
+      .from("martial_arts_sessions")
+      .delete()
+      .eq("id", id);
+
+    if (error) {
+      // Roll back on failure.
+      setWeekSessions(previous);
+      setErrorMsg(`Failed to delete: ${error.message}`);
+    }
+  }
+
+  // Lookup: emoji by discipline name, for the list.
+  const emojiByDiscipline: Record<string, string> = Object.fromEntries(
+    DISCIPLINES.map((d) => [d.key, d.emoji])
+  );
+
+  // True when user is logging for a day other than today.
+  const isBackdating = logDate !== todayLocal();
 
   // Derived values — computed from state, not stored separately.
   const weekMinutes = weekSessions.reduce((sum, s) => sum + s.duration_min, 0);
@@ -109,6 +129,40 @@ export default function Home() {
           Tap a discipline to log a class.
         </p>
       </header>
+
+      {/* Date selector row — default "Today", but can be changed to backdate. */}
+      <div
+        className={`mb-4 flex items-center justify-between p-3 rounded-xl border ${
+          isBackdating
+            ? "border-amber-400 bg-amber-50 dark:bg-amber-900/20"
+            : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900"
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-zinc-500">Logging for:</span>
+          <span className="text-sm font-semibold">
+            {relativeLabel(logDate)}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={logDate}
+            max={todayLocal()}
+            onChange={(e) => setLogDate(e.target.value)}
+            className="text-xs bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1"
+          />
+          {isBackdating && (
+            <button
+              onClick={() => setLogDate(todayLocal())}
+              className="text-xs text-green-600 dark:text-green-400 font-medium"
+              aria-label="Reset to today"
+            >
+              Today
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* Weekly progress panel */}
       <section className="mb-6 p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
@@ -176,6 +230,42 @@ export default function Home() {
         <div className="mt-6 p-4 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-900 dark:text-red-200 text-center text-sm">
           {errorMsg}
         </div>
+      )}
+
+      {/* This week's classes — for quick recovery from misclicks */}
+      {weekSessions.length > 0 && (
+        <section className="mt-8">
+          <h3 className="text-sm font-medium text-zinc-500 mb-2">
+            This week&apos;s classes
+          </h3>
+          <ul className="space-y-2">
+            {weekSessions.map((s) => (
+              <li
+                key={s.id}
+                className="flex items-center gap-3 p-3 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
+              >
+                <span className="text-2xl">
+                  {emojiByDiscipline[s.discipline] ?? "•"}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-semibold truncate">
+                    {s.discipline}
+                  </div>
+                  <div className="text-xs text-zinc-500">
+                    {relativeLabel(s.date)} · {s.duration_min} min
+                  </div>
+                </div>
+                <button
+                  onClick={() => handleDelete(s.id)}
+                  className="text-zinc-400 hover:text-red-500 text-xl px-2"
+                  aria-label="Delete class"
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
     </main>
   );

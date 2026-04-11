@@ -30,7 +30,8 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
   ```
   export PATH="/usr/local/bin:$PATH" && export npm_config_cache="$HOME/.npm-cache-new"
   ```
-- Project lives at `~/Documents/workout-app`
+- **Project lives at `~/dev/workout-app`** (NOT `~/Documents/workout-app` — that location is iCloud Drive synced, which corrupts `node_modules` at random by evicting files to cloud placeholders. Learned the hard way. NEVER put dev projects under `~/Documents`, `~/Desktop`, or any cloud-synced folder on this machine.)
+- A stale copy of the project exists at `~/Documents/workout-app` with a locked (iCloud-held) `node_modules` folder. Safe to ignore; the user can delete it manually later once iCloud releases the lock.
 - Dev server: `npm run dev` → http://localhost:3000
 
 ## Current status

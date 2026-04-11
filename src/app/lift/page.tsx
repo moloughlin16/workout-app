@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { todayLocal, relativeLabel } from "@/lib/date";
 
 // ============================================================
 // TEMPLATE DEFINITIONS
@@ -84,6 +85,11 @@ export default function LiftPage() {
   const [saving, setSaving] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // The date we're logging FOR. Defaults to today; user can change it
+  // to back-date a workout they did earlier but forgot to log.
+  const [logDate, setLogDate] = useState<string>(todayLocal());
+  const isBackdating = logDate !== todayLocal();
 
   // When user picks a template, initialize empty form state for each exercise
   // and kick off a fetch of last-time data for each.
@@ -203,9 +209,10 @@ export default function LiftPage() {
     }
 
     // Step 1: create the parent session row and get its ID back.
+    // Pass logDate explicitly to support back-dating workouts.
     const { data: sessionData, error: sessionError } = await supabase
       .from("lift_sessions")
-      .insert({ template_name: activeTemplate.name })
+      .insert({ template_name: activeTemplate.name, date: logDate })
       .select()
       .single();
 
@@ -257,6 +264,37 @@ export default function LiftPage() {
           <p className="text-sm text-zinc-500 mt-1">Pick today&apos;s workout.</p>
         </header>
 
+        {/* Date selector — allows back-dating a workout */}
+        <div
+          className={`mb-4 flex items-center justify-between p-3 rounded-xl border ${
+            isBackdating
+              ? "border-amber-400 bg-amber-50 dark:bg-amber-900/20"
+              : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-zinc-500">Logging for:</span>
+            <span className="text-sm font-semibold">{relativeLabel(logDate)}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={logDate}
+              max={todayLocal()}
+              onChange={(e) => setLogDate(e.target.value)}
+              className="text-xs bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1"
+            />
+            {isBackdating && (
+              <button
+                onClick={() => setLogDate(todayLocal())}
+                className="text-xs text-green-600 dark:text-green-400 font-medium"
+              >
+                Today
+              </button>
+            )}
+          </div>
+        </div>
+
         {successMsg && (
           <div className="mb-4 p-4 rounded-xl bg-green-100 dark:bg-green-900/30 text-green-900 dark:text-green-200 text-center">
             {successMsg}
@@ -289,6 +327,15 @@ export default function LiftPage() {
         <div>
           <h1 className="text-2xl font-bold">{activeTemplate.name}</h1>
           <p className="text-xs text-zinc-500 mt-1">{activeTemplate.subtitle}</p>
+          <p
+            className={`text-xs mt-1 ${
+              isBackdating
+                ? "text-amber-600 dark:text-amber-400 font-medium"
+                : "text-zinc-500"
+            }`}
+          >
+            For {relativeLabel(logDate)}
+          </p>
         </div>
         <button
           onClick={cancelWorkout}
