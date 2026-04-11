@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { todayLocal, relativeLabel } from "@/lib/date";
 
@@ -81,6 +81,33 @@ type LastTime = {
   date: string;
 };
 
+// One row from the lift_sessions table, used for the "Recent sessions" list
+// on the picker view and the edit view.
+type PastSession = {
+  id: string;
+  date: string;
+  template_name: string;
+  created_at: string;
+  set_count?: number;
+};
+
+// One row from the lift_sets table, used when editing an existing session.
+type SavedSet = {
+  id: string;
+  exercise_name: string;
+  set_number: number;
+  weight_lb: number | null;
+  reps: number | null;
+};
+
+// Shape of the edit-view state: grouped by exercise, each with editable rows.
+// We reuse the same `SetInput` shape as the active-workout form so the UI
+// component for a set row can be shared if we ever extract it.
+type EditExerciseGroup = {
+  name: string;
+  sets: SetInput[];
+};
+
 // ============================================================
 // MAIN COMPONENT
 // ============================================================
@@ -93,6 +120,16 @@ export default function LiftPage() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Past lift sessions shown on the picker view. Loaded on mount.
+  const [pastSessions, setPastSessions] = useState<PastSession[]>([]);
+  const [loadingPast, setLoadingPast] = useState(true);
+
+  // Edit mode: when non-null, we're editing a past session instead of
+  // logging a new one. `editGroups` holds the exercise→sets structure that
+  // the edit view renders.
+  const [editingSession, setEditingSession] = useState<PastSession | null>(null);
+  const [editGroups, setEditGroups] = useState<EditExerciseGroup[]>([]);
+
   // Names of exercises the user chose to skip in the current workout only.
   // A Set is used because lookup is O(1) and we don't care about order.
   // Resets every time a new template is started.
@@ -102,6 +139,44 @@ export default function LiftPage() {
   // to back-date a workout they did earlier but forgot to log.
   const [logDate, setLogDate] = useState<string>(todayLocal());
   const isBackdating = logDate !== todayLocal();
+
+  // Load the recent past sessions list when the picker view first mounts.
+  useEffect(() => {
+    loadPastSessions();
+  }, []);
+
+  async function loadPastSessions() {
+    setLoadingPast(true);
+    // Fetch the 10 most recent sessions with a COUNT of their sets joined in.
+    // In Supabase/PostgREST, `lift_sets(count)` in the select string tells
+    // the server to return a `lift_sets` array with a single `{ count: N }`
+    // row for each session — much faster than fetching every set row.
+    const { data, error } = await supabase
+      .from("lift_sessions")
+      .select("id, date, template_name, created_at, lift_sets(count)")
+      .order("date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .limit(10);
+
+    if (error) {
+      console.error("Failed to load past sessions:", error.message);
+      setLoadingPast(false);
+      return;
+    }
+
+    // Normalize the nested count into a flat `set_count` field.
+    type Row = PastSession & { lift_sets: { count: number }[] };
+    const rows = (data ?? []) as Row[];
+    const normalized: PastSession[] = rows.map((r) => ({
+      id: r.id,
+      date: r.date,
+      template_name: r.template_name,
+      created_at: r.created_at,
+      set_count: r.lift_sets?.[0]?.count ?? 0,
+    }));
+    setPastSessions(normalized);
+    setLoadingPast(false);
+  }
 
   // When user picks a template, initialize empty form state for each exercise
   // and kick off a fetch of last-time data for each.
@@ -273,6 +348,8 @@ export default function LiftPage() {
     // Go back to the template picker.
     setActiveTemplate(null);
     setForms({});
+    // Refresh the recent-sessions list so the new workout shows up.
+    loadPastSessions();
   }
 
   function cancelWorkout() {
@@ -284,8 +361,312 @@ export default function LiftPage() {
   }
 
   // ============================================================
+  // EDIT PAST SESSION
+  // ============================================================
+
+  // Enter edit mode: load all saved sets for the session and group them
+  // by exercise in the order they appear. Each set becomes an editable row.
+  async function startEditing(session: PastSession) {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+
+    const { data, error } = await supabase
+      .from("lift_sets")
+      .select("id, exercise_name, set_number, weight_lb, reps")
+      .eq("session_id", session.id)
+      .order("exercise_name", { ascending: true })
+      .order("set_number", { ascending: true });
+
+    if (error) {
+      setErrorMsg(`Failed to load session: ${error.message}`);
+      return;
+    }
+
+    // Group sets by exercise_name. We use a Map (rather than a plain object)
+    // so insertion order is preserved — exercises will render in the order
+    // they first appear in the query.
+    const groupsMap = new Map<string, SetInput[]>();
+    for (const row of (data ?? []) as SavedSet[]) {
+      const inputRow: SetInput = {
+        weight: row.weight_lb != null ? String(row.weight_lb) : "",
+        reps: row.reps != null ? String(row.reps) : "",
+      };
+      const existing = groupsMap.get(row.exercise_name);
+      if (existing) {
+        existing.push(inputRow);
+      } else {
+        groupsMap.set(row.exercise_name, [inputRow]);
+      }
+    }
+
+    const groups: EditExerciseGroup[] = Array.from(groupsMap.entries()).map(
+      ([name, sets]) => ({ name, sets })
+    );
+
+    setEditGroups(groups);
+    setEditingSession(session);
+  }
+
+  function cancelEditing() {
+    setEditingSession(null);
+    setEditGroups([]);
+    setErrorMsg(null);
+  }
+
+  function updateEditSet(
+    exerciseIdx: number,
+    setIdx: number,
+    field: "weight" | "reps",
+    value: string
+  ) {
+    setEditGroups((prev) =>
+      prev.map((g, gi) =>
+        gi !== exerciseIdx
+          ? g
+          : {
+              ...g,
+              sets: g.sets.map((s, si) =>
+                si === setIdx ? { ...s, [field]: value } : s
+              ),
+            }
+      )
+    );
+  }
+
+  function addEditSet(exerciseIdx: number) {
+    setEditGroups((prev) =>
+      prev.map((g, gi) =>
+        gi !== exerciseIdx
+          ? g
+          : { ...g, sets: [...g.sets, { weight: "", reps: "" }] }
+      )
+    );
+  }
+
+  function removeEditSet(exerciseIdx: number, setIdx: number) {
+    setEditGroups((prev) =>
+      prev.map((g, gi) =>
+        gi !== exerciseIdx
+          ? g
+          : { ...g, sets: g.sets.filter((_, si) => si !== setIdx) }
+      )
+    );
+  }
+
+  // Save edits by the "nuke and replace" strategy: delete every set tied
+  // to this session, then bulk-insert the edited rows. Simpler than diffing
+  // individual UPDATE/INSERT/DELETE calls, and the parent `lift_sessions`
+  // row is untouched so its id/date/template_name stay stable.
+  async function saveEdit() {
+    if (!editingSession) return;
+    setSaving(true);
+    setErrorMsg(null);
+
+    // Collect non-empty sets, same filter as finishWorkout.
+    const allSets: {
+      session_id: string;
+      exercise_name: string;
+      set_number: number;
+      weight_lb: number | null;
+      reps: number | null;
+    }[] = [];
+
+    for (const group of editGroups) {
+      group.sets.forEach((s, idx) => {
+        const weight = s.weight.trim() ? parseFloat(s.weight) : null;
+        const reps = s.reps.trim() ? parseInt(s.reps, 10) : null;
+        if (reps !== null || weight !== null) {
+          allSets.push({
+            session_id: editingSession.id,
+            exercise_name: group.name,
+            set_number: idx + 1,
+            weight_lb: weight,
+            reps,
+          });
+        }
+      });
+    }
+
+    // Step 1: delete existing sets for this session.
+    const { error: deleteError } = await supabase
+      .from("lift_sets")
+      .delete()
+      .eq("session_id", editingSession.id);
+
+    if (deleteError) {
+      setErrorMsg(`Failed to update: ${deleteError.message}`);
+      setSaving(false);
+      return;
+    }
+
+    // Step 2: insert the edited rows. If all rows were emptied out we skip
+    // this — the session will be left with zero sets (user can delete it
+    // from the list if they want it gone entirely).
+    if (allSets.length > 0) {
+      const { error: insertError } = await supabase
+        .from("lift_sets")
+        .insert(allSets);
+      if (insertError) {
+        setErrorMsg(`Failed to save sets: ${insertError.message}`);
+        setSaving(false);
+        return;
+      }
+    }
+
+    setSuccessMsg(`Updated session · ${allSets.length} sets`);
+    setSaving(false);
+    setEditingSession(null);
+    setEditGroups([]);
+    // Refresh the picker list so counts and most-recent order are correct.
+    loadPastSessions();
+  }
+
+  // Delete an entire session. The FK on lift_sets has ON DELETE CASCADE,
+  // so removing the parent row automatically drops its sets too.
+  async function deleteSession(session: PastSession) {
+    if (
+      !confirm(
+        `Delete ${session.template_name} from ${relativeLabel(
+          session.date
+        )}? This can't be undone.`
+      )
+    ) {
+      return;
+    }
+    // Optimistic update — remove from the list immediately.
+    const previous = pastSessions;
+    setPastSessions((curr) => curr.filter((s) => s.id !== session.id));
+
+    const { error } = await supabase
+      .from("lift_sessions")
+      .delete()
+      .eq("id", session.id);
+
+    if (error) {
+      setPastSessions(previous);
+      setErrorMsg(`Failed to delete: ${error.message}`);
+      return;
+    }
+
+    // If we were editing this session, bail out of edit mode too.
+    if (editingSession?.id === session.id) {
+      setEditingSession(null);
+      setEditGroups([]);
+    }
+  }
+
+  // ============================================================
   // RENDER
   // ============================================================
+
+  // View 0: editing a past session. Takes priority over picker/active views.
+  if (editingSession) {
+    return (
+      <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 max-w-md mx-auto">
+        <header className="py-6 flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Edit session</h1>
+            <p className="text-xs text-zinc-500 mt-1">
+              {editingSession.template_name} ·{" "}
+              {relativeLabel(editingSession.date)}
+            </p>
+          </div>
+          <button
+            onClick={cancelEditing}
+            className="text-xs text-zinc-500 underline"
+          >
+            Cancel
+          </button>
+        </header>
+
+        {editGroups.length === 0 ? (
+          <p className="text-sm text-zinc-500">
+            No sets saved for this session.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            {editGroups.map((group, gi) => (
+              <section
+                key={group.name}
+                className="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
+              >
+                <h2 className="font-semibold leading-tight">{group.name}</h2>
+                <div className="mt-3 space-y-2">
+                  {group.sets.map((s, si) => (
+                    <div key={si} className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-zinc-400 w-6">
+                        #{si + 1}
+                      </span>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        placeholder="lb"
+                        value={s.weight}
+                        onChange={(e) =>
+                          updateEditSet(gi, si, "weight", e.target.value)
+                        }
+                        className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-sm"
+                      />
+                      <span className="text-zinc-400 text-sm">×</span>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        placeholder="reps"
+                        value={s.reps}
+                        onChange={(e) =>
+                          updateEditSet(gi, si, "reps", e.target.value)
+                        }
+                        className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-sm"
+                      />
+                      <button
+                        onClick={() => removeEditSet(gi, si)}
+                        className="text-zinc-400 hover:text-red-500 text-lg px-1"
+                        aria-label="Remove set"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => addEditSet(gi)}
+                    className="text-xs text-green-600 dark:text-green-400 font-medium"
+                  >
+                    + Add set
+                  </button>
+                </div>
+              </section>
+            ))}
+          </div>
+        )}
+
+        {errorMsg && (
+          <div className="mt-4 p-4 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-900 dark:text-red-200 text-center text-sm">
+            {errorMsg}
+          </div>
+        )}
+
+        <button
+          onClick={saveEdit}
+          disabled={saving}
+          className="mt-6 w-full py-4 rounded-2xl bg-green-600 text-white font-semibold text-lg active:scale-[0.98] transition-transform disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save changes"}
+        </button>
+
+        <button
+          onClick={() => deleteSession(editingSession)}
+          className="mt-3 w-full py-3 rounded-2xl bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 font-medium text-sm border border-red-200 dark:border-red-900/30"
+        >
+          Delete entire session
+        </button>
+
+        <p className="mt-4 text-xs text-zinc-500 text-center">
+          Tip: edit mode only shows exercises that already had saved sets. To
+          add a new exercise, log a fresh session instead.
+        </p>
+      </main>
+    );
+  }
 
   // View 1: template picker (nothing active yet)
   if (!activeTemplate) {
@@ -348,6 +729,49 @@ export default function LiftPage() {
             </button>
           ))}
         </div>
+
+        {/* Recent sessions — tap to edit, × to delete */}
+        <section className="mt-8">
+          <h3 className="text-sm font-medium text-zinc-500 mb-2">
+            Recent sessions
+          </h3>
+          {loadingPast && (
+            <p className="text-xs text-zinc-500">Loading…</p>
+          )}
+          {!loadingPast && pastSessions.length === 0 && (
+            <p className="text-xs text-zinc-500">No sessions logged yet.</p>
+          )}
+          <ul className="space-y-2">
+            {pastSessions.map((s) => (
+              <li
+                key={s.id}
+                className="flex items-center gap-3 p-3 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
+              >
+                <button
+                  onClick={() => startEditing(s)}
+                  className="flex-1 min-w-0 text-left"
+                  aria-label={`Edit ${s.template_name} from ${relativeLabel(
+                    s.date
+                  )}`}
+                >
+                  <div className="text-sm font-semibold truncate">
+                    🏋️ {s.template_name}
+                  </div>
+                  <div className="text-xs text-zinc-500">
+                    {relativeLabel(s.date)} · {s.set_count ?? 0} sets
+                  </div>
+                </button>
+                <button
+                  onClick={() => deleteSession(s)}
+                  className="text-zinc-400 hover:text-red-500 text-xl px-2"
+                  aria-label="Delete session"
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
       </main>
     );
   }
