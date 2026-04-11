@@ -37,16 +37,22 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
 
 ### Completed
 - [x] Scaffolded Next.js + TS + Tailwind + App Router + src dir + import alias `@/*`
-- [x] Replaced starter page with martial arts quick-log buttons (4 disciplines: MMA, Kickboxing, Grappling, Sparring)
-- [x] Client-side state with `useState` showing "Logged X ✓" confirmation
-- [x] `git init` + first commit
-- [x] GitHub remote set up, push works
+- [x] `git init` + first commit, GitHub remote wired up
 - [x] Supabase project created, `.env.local` populated with URL + anon key
-- [x] `martial_arts_sessions` table created with RLS + permissive anon policy
-- [x] `@supabase/supabase-js` installed, `src/lib/supabase.ts` client created
-- [x] `handleLog` wired to insert rows
-- [x] Weekly progress panel: hours + class count + progress bar + per-discipline breakdown
-- [x] Loading/saving/error UI states
+- [x] **Martial arts home page** (`src/app/page.tsx`):
+  - Four quick-log buttons (MMA, Kickboxing, Grappling, Sparring)
+  - Saves to `martial_arts_sessions`
+  - Weekly progress panel: hours + class count + progress bar + per-discipline breakdown toward 10h goal
+  - Loading/saving/error UI states
+- [x] **Lift tracker** (`src/app/lift/page.tsx`):
+  - Day A / Day B template picker
+  - Templates defined in-file as `TEMPLATES` constant (easy to edit)
+  - Active workout view: per-exercise cards with inputs for each set (weight × reps)
+  - "Last time" hint per exercise via query of most recent `lift_sets` row
+  - Add/remove individual sets
+  - "Finish Workout" inserts parent `lift_sessions` row then bulk-inserts `lift_sets`
+- [x] **Bottom nav** (`src/components/BottomNav.tsx`): fixed nav bar with Martial Arts + Lift tabs, active-tab highlight via `usePathname()`
+- [x] `src/lib/supabase.ts` shared client
 
 ### Database schema
 
@@ -57,30 +63,51 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
 - duration_min (int, default 60)
 - notes (text, nullable)
 - created_at (timestamptz, default now)
-- RLS enabled, policy "allow all for anon" (FOR ALL, USING true, WITH CHECK true)
+- RLS enabled, policy "allow all for anon"
 
-### Next session plan
+**lift_sessions**
+- id (uuid pk)
+- date (date, default current_date)
+- template_name (text, check: 'Day A' / 'Day B' / 'Custom')
+- notes (text, nullable)
+- rpe (int 1-10, nullable)
+- created_at
+- RLS + permissive anon policy
 
-**Phase 1, Feature 2: lift tracker with Day A / Day B templates.**
+**lift_sets**
+- id (uuid pk)
+- session_id (uuid fk → lift_sessions.id, ON DELETE CASCADE)
+- exercise_name (text)
+- set_number (int)
+- weight_lb (numeric 6,2, nullable)
+- reps (int, nullable)
+- rpe (int 1-10, nullable)
+- created_at
+- indexes: (exercise_name, created_at desc), (session_id)
+- RLS + permissive anon policy
 
-1. Design schema: `exercises`, `workout_templates`, `lift_sessions`, `lift_sets`
-2. Seed the user's Day A / Day B templates (see below — use SQL or a Supabase seed script)
-3. New route `/lift` for lifting workouts (create `src/app/lift/page.tsx`)
-4. UI: pick day → see list of exercises with last-time weights → enter sets (weight/reps) → save
-5. "Last time" reference fetched per exercise for quick comparison
-6. Minimal bottom nav so user can flip between home (martial arts) and /lift
-7. RPE field (optional, 1-10 scale)
-8. Commit + push
+### Next session plan — DEPLOY
 
-**Also worth tackling in the same session (if time):**
-- Add a small "recent sessions" list on the martial arts page (last 5 classes)
-- Add long-press or edit-on-tap on a class to change duration/delete (right now it's always 60 min)
+**Top priority: get this on the user's phone via Vercel + PWA.**
 
-### Known followups / debt
-- Auth not set up — currently using permissive RLS policy. Fine for personal use but MUST add auth before sharing or deploying publicly.
-- Edit/delete UX: no way to fix a misclick yet. Add either swipe-to-delete or a "recent sessions" list with edit buttons.
-- Class duration hardcoded to 60. Add a long-press to enter custom duration for sparring or extra-long classes.
-- No date picker — all logs go to "today". Add back-dating for end-of-day logging of yesterday's classes.
+The app is feature-complete enough for daily use. The single biggest lift-in-utility next is deploying so they can actually use it at the gym.
+
+1. Sign user in to Vercel (GitHub OAuth)
+2. Import `moloughlin16/workout-app` from GitHub
+3. Add env vars (NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY) in Vercel dashboard
+4. Deploy; get the vercel.app URL
+5. Add PWA manifest (`public/manifest.json`) + icons
+6. Add `<link rel="manifest" />` in layout.tsx metadata
+7. Show user how to "Add to Home Screen" on iOS Safari
+8. Test on phone; log a real class from phone
+
+### Followups / debt (not urgent)
+- Auth not set up — permissive RLS policy is fine for personal/private use.
+- No edit/delete UX on martial arts classes. Add "recent sessions" list with swipe-to-delete.
+- Martial arts duration hardcoded to 60. Long-press to customize.
+- No backdating — all logs go to "today".
+- No RPE input on lift tracker yet (column exists, just not wired to UI).
+- Lift session notes field not surfaced in UI.
 
 ### Roadmap after that (do not build yet — order subject to change)
 
