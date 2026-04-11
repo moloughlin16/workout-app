@@ -39,14 +39,19 @@ export default function MartialArtsPage() {
   // Changing this lets the user log a class they missed logging earlier.
   const [logDate, setLogDate] = useState<string>(todayLocal());
 
-  // Notes editing state.
-  // `expandedId` is the id of the session whose notes editor is currently open
+  // Notes + duration editing state.
+  // `expandedId` is the id of the session whose editor is currently open
   // (or null if none). Only one open at a time keeps the UI tidy.
   const [expandedId, setExpandedId] = useState<string | null>(null);
   // `noteDrafts` holds in-progress text for each session id. We keep drafts
   // separate from the saved `weekSessions` so typing doesn't mutate the
   // "source of truth" until you hit Save.
   const [noteDrafts, setNoteDrafts] = useState<Record<string, string>>({});
+  // `durationDrafts` is the parallel draft for the duration input. Stored
+  // as a string because form inputs are strings; parsed to int at save.
+  const [durationDrafts, setDurationDrafts] = useState<Record<string, string>>(
+    {}
+  );
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -96,28 +101,51 @@ export default function MartialArtsPage() {
       ...curr,
       [session.id]: curr[session.id] ?? session.notes ?? "",
     }));
+    setDurationDrafts((curr) => ({
+      ...curr,
+      [session.id]: curr[session.id] ?? String(session.duration_min),
+    }));
   }
 
-  async function handleSaveNote(id: string) {
+  // Save the editor state: both the note text and the session duration.
+  // Duration is clamped to [1, 600] min; invalid input falls back to
+  // whatever was previously saved on the row.
+  async function handleSaveSession(id: string) {
     const draft = noteDrafts[id] ?? "";
-    const value = draft.trim().length === 0 ? null : draft.trim();
+    const notesValue = draft.trim().length === 0 ? null : draft.trim();
+
+    // Parse duration. If the user typed nonsense or cleared the field,
+    // keep the previous value instead of writing NaN/null to the DB.
+    const durationDraft = durationDrafts[id] ?? "";
+    const parsed = parseInt(durationDraft, 10);
+    const currentRow = weekSessions.find((s) => s.id === id);
+    const previousDuration = currentRow?.duration_min ?? 60;
+    const durationValue =
+      Number.isFinite(parsed) && parsed > 0 && parsed <= 600
+        ? parsed
+        : previousDuration;
 
     setSavingNoteId(id);
     setErrorMsg(null);
 
+    // Optimistic update for BOTH fields.
     const previous = weekSessions;
     setWeekSessions((curr) =>
-      curr.map((s) => (s.id === id ? { ...s, notes: value } : s))
+      curr.map((s) =>
+        s.id === id
+          ? { ...s, notes: notesValue, duration_min: durationValue }
+          : s
+      )
     );
 
     const { error } = await supabase
       .from("martial_arts_sessions")
-      .update({ notes: value })
+      .update({ notes: notesValue, duration_min: durationValue })
       .eq("id", id);
 
     if (error) {
       setWeekSessions(previous);
-      setErrorMsg(`Failed to save note: ${error.message}`);
+      setErrorMsg(`Failed to save: ${error.message}`);
     } else {
       setExpandedId(null);
     }
@@ -319,6 +347,31 @@ export default function MartialArtsPage() {
 
                   {isExpanded && (
                     <div className="px-3 pb-3 border-t border-zinc-100 dark:border-zinc-800 pt-3">
+                      {/* Duration input row */}
+                      <div className="flex items-center gap-2 mb-2">
+                        <label
+                          htmlFor={`duration-${s.id}`}
+                          className="text-xs text-zinc-500"
+                        >
+                          Duration
+                        </label>
+                        <input
+                          id={`duration-${s.id}`}
+                          type="number"
+                          inputMode="numeric"
+                          min={1}
+                          max={600}
+                          value={durationDrafts[s.id] ?? ""}
+                          onChange={(e) =>
+                            setDurationDrafts((curr) => ({
+                              ...curr,
+                              [s.id]: e.target.value,
+                            }))
+                          }
+                          className="w-16 text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                        <span className="text-xs text-zinc-500">min</span>
+                      </div>
                       <textarea
                         value={noteDrafts[s.id] ?? ""}
                         onChange={(e) =>
@@ -339,7 +392,7 @@ export default function MartialArtsPage() {
                           Cancel
                         </button>
                         <button
-                          onClick={() => handleSaveNote(s.id)}
+                          onClick={() => handleSaveSession(s.id)}
                           disabled={savingNoteId === s.id}
                           className="text-xs px-3 py-1.5 rounded-lg bg-green-600 text-white font-medium disabled:opacity-50"
                         >
