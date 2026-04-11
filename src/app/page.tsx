@@ -1,12 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
-import { todayLocal, startOfWeekLocal, relativeLabel } from "@/lib/date";
+import { startOfWeekLocal, relativeLabel } from "@/lib/date";
 
-// The four martial arts disciplines we want to track.
-// `key` is what we store in the database; `label` is what we show on the button.
-// Must match the `check` constraint in the martial_arts_sessions table.
+// Kept in sync with martial arts page. If you add a discipline, update both.
 const DISCIPLINES = [
   { key: "MMA", label: "MMA", emoji: "🥋" },
   { key: "Kickboxing", label: "Kickboxing", emoji: "🥊" },
@@ -14,11 +13,10 @@ const DISCIPLINES = [
   { key: "Sparring", label: "Sparring", emoji: "⚡" },
 ] as const;
 
-// Goal: 10 hours per week of martial arts.
 const WEEKLY_HOURS_GOAL = 10;
+const WEEKLY_LIFTS_GOAL = 2;
+const RECENT_NOTES_LIMIT = 3;
 
-// Shape of one row in the martial_arts_sessions table.
-// This is a TypeScript "type" — a compile-time description of what the data looks like.
 type Session = {
   id: string;
   date: string;
@@ -28,146 +26,111 @@ type Session = {
   created_at: string;
 };
 
-export default function Home() {
-  // State variables.
-  const [lastLogged, setLastLogged] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+type LiftSession = {
+  id: string;
+  date: string;
+  template_name: string;
+  created_at: string;
+};
+
+export default function HomePage() {
   const [weekSessions, setWeekSessions] = useState<Session[]>([]);
-  const [loadingSessions, setLoadingSessions] = useState(true);
+  const [weekLifts, setWeekLifts] = useState<LiftSession[]>([]);
+  // Recent martial arts notes (across all time, not just this week) — the
+  // "what have you been working on" feed. Surfaces your past learnings so
+  // you're reminded of them before your next class.
+  const [recentNotes, setRecentNotes] = useState<Session[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // The date we're logging FOR. Defaults to today.
-  // Changing this lets the user log a class they missed logging earlier.
-  const [logDate, setLogDate] = useState<string>(todayLocal());
-
-  // Fetch this week's sessions when the page first loads.
   useEffect(() => {
-    loadWeekSessions();
+    // Run all three fetches in parallel — they're independent, so waiting
+    // for one before starting the next would be pointlessly slow.
+    Promise.all([loadWeekSessions(), loadWeekLifts(), loadRecentNotes()]).then(
+      () => setLoading(false)
+    );
   }, []);
 
   async function loadWeekSessions() {
-    setLoadingSessions(true);
     const { data, error } = await supabase
       .from("martial_arts_sessions")
       .select("*")
       .gte("date", startOfWeekLocal())
       .order("created_at", { ascending: false });
-
     if (error) {
-      setErrorMsg(`Failed to load sessions: ${error.message}`);
-    } else {
-      setWeekSessions(data ?? []);
+      console.error("Failed to load martial arts sessions:", error.message);
+      return;
     }
-    setLoadingSessions(false);
+    setWeekSessions(data ?? []);
   }
 
-  async function handleLog(discipline: string) {
-    setSaving(true);
-    setErrorMsg(null);
+  async function loadWeekLifts() {
+    const { data, error } = await supabase
+      .from("lift_sessions")
+      .select("id, date, template_name, created_at")
+      .gte("date", startOfWeekLocal())
+      .order("created_at", { ascending: false });
+    if (error) {
+      console.error("Failed to load lift sessions:", error.message);
+      return;
+    }
+    setWeekLifts(data ?? []);
+  }
 
-    // Explicitly send the logDate so we can log for a past day.
-    // If logDate === today, this is the same as omitting it (the
-    // DB default is current_date) — but being explicit is clearer.
-    const { error } = await supabase
+  async function loadRecentNotes() {
+    const { data, error } = await supabase
       .from("martial_arts_sessions")
-      .insert({ discipline, date: logDate });
-
+      .select("*")
+      .not("notes", "is", null)
+      .order("created_at", { ascending: false })
+      .limit(RECENT_NOTES_LIMIT * 2);
     if (error) {
-      setErrorMsg(`Failed to save: ${error.message}`);
-    } else {
-      setLastLogged(discipline);
-      // Refresh the week total so the counter updates immediately.
-      await loadWeekSessions();
+      console.error("Failed to load recent notes:", error.message);
+      return;
     }
-    setSaving(false);
+    const filtered = (data ?? [])
+      .filter((s) => (s.notes ?? "").trim().length > 0)
+      .slice(0, RECENT_NOTES_LIMIT);
+    setRecentNotes(filtered);
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm("Delete this class?")) return;
-
-    // Optimistic update: remove from UI immediately for snappy feel.
-    const previous = weekSessions;
-    setWeekSessions((curr) => curr.filter((s) => s.id !== id));
-
-    const { error } = await supabase
-      .from("martial_arts_sessions")
-      .delete()
-      .eq("id", id);
-
-    if (error) {
-      // Roll back on failure.
-      setWeekSessions(previous);
-      setErrorMsg(`Failed to delete: ${error.message}`);
-    }
-  }
-
-  // Lookup: emoji by discipline name, for the list.
+  // Lookup: emoji by discipline name, for the recent-notes section.
   const emojiByDiscipline: Record<string, string> = Object.fromEntries(
     DISCIPLINES.map((d) => [d.key, d.emoji])
   );
 
-  // True when user is logging for a day other than today.
-  const isBackdating = logDate !== todayLocal();
-
-  // Derived values — computed from state, not stored separately.
+  // Derived values.
   const weekMinutes = weekSessions.reduce((sum, s) => sum + s.duration_min, 0);
   const weekHours = weekMinutes / 60;
-  const goalPercent = Math.min(100, (weekHours / WEEKLY_HOURS_GOAL) * 100);
+  const maGoalPercent = Math.min(100, (weekHours / WEEKLY_HOURS_GOAL) * 100);
 
-  // Count sessions per discipline for the breakdown.
   const countsByDiscipline: Record<string, number> = {};
   for (const s of weekSessions) {
     countsByDiscipline[s.discipline] =
       (countsByDiscipline[s.discipline] ?? 0) + 1;
   }
 
+  const lastLift = weekLifts[0] ?? null;
+  const liftGoalPercent = Math.min(
+    100,
+    (weekLifts.length / WEEKLY_LIFTS_GOAL) * 100
+  );
+
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 max-w-md mx-auto">
       <header className="py-6">
-        <h1 className="text-3xl font-bold">Workout Tracker</h1>
-        <p className="text-sm text-zinc-500 mt-1">
-          Tap a discipline to log a class.
-        </p>
+        <h1 className="text-3xl font-bold">Home</h1>
+        <p className="text-sm text-zinc-500 mt-1">Your week at a glance.</p>
       </header>
 
-      {/* Date selector row — default "Today", but can be changed to backdate. */}
-      <div
-        className={`mb-4 flex items-center justify-between p-3 rounded-xl border ${
-          isBackdating
-            ? "border-amber-400 bg-amber-50 dark:bg-amber-900/20"
-            : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900"
-        }`}
+      {/* Martial arts weekly card — tappable, links to /martial-arts */}
+      <Link
+        href="/martial-arts"
+        className="block mb-4 p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 active:scale-[0.98] transition-transform"
       >
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-zinc-500">Logging for:</span>
-          <span className="text-sm font-semibold">
-            {relativeLabel(logDate)}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <input
-            type="date"
-            value={logDate}
-            max={todayLocal()}
-            onChange={(e) => setLogDate(e.target.value)}
-            className="text-xs bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1"
-          />
-          {isBackdating && (
-            <button
-              onClick={() => setLogDate(todayLocal())}
-              className="text-xs text-green-600 dark:text-green-400 font-medium"
-              aria-label="Reset to today"
-            >
-              Today
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Weekly progress panel */}
-      <section className="mb-6 p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
         <div className="flex items-baseline justify-between">
-          <h2 className="text-sm font-medium text-zinc-500">This week</h2>
+          <h2 className="text-sm font-medium text-zinc-500">
+            Martial arts this week
+          </h2>
           <span className="text-sm text-zinc-500">
             Goal: {WEEKLY_HOURS_GOAL}h
           </span>
@@ -178,14 +141,12 @@ export default function Home() {
             ({weekSessions.length} classes)
           </span>
         </div>
-        {/* Progress bar */}
         <div className="mt-3 h-2 w-full rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
           <div
             className="h-full bg-green-500 transition-all duration-500"
-            style={{ width: `${goalPercent}%` }}
+            style={{ width: `${maGoalPercent}%` }}
           />
         </div>
-        {/* Per-discipline breakdown */}
         {weekSessions.length > 0 && (
           <div className="mt-4 flex flex-wrap gap-x-4 gap-y-1 text-xs text-zinc-600 dark:text-zinc-400">
             {DISCIPLINES.map((d) => (
@@ -195,77 +156,78 @@ export default function Home() {
             ))}
           </div>
         )}
-        {loadingSessions && (
-          <p className="mt-2 text-xs text-zinc-500">Loading…</p>
+        {weekSessions.length === 0 && !loading && (
+          <p className="mt-3 text-xs text-zinc-400">
+            No classes yet this week — tap to log one
+          </p>
         )}
-      </section>
+      </Link>
 
-      {/* Quick-log buttons */}
-      <section className="grid grid-cols-2 gap-4">
-        {DISCIPLINES.map((d) => (
-          <button
-            key={d.key}
-            onClick={() => handleLog(d.key)}
-            disabled={saving}
-            className="aspect-square rounded-2xl bg-white dark:bg-zinc-900 shadow-sm border border-zinc-200 dark:border-zinc-800 flex flex-col items-center justify-center gap-2 active:scale-95 transition-transform disabled:opacity-50 disabled:active:scale-100"
-          >
-            <span className="text-4xl">{d.emoji}</span>
-            <span className="text-lg font-semibold">{d.label}</span>
-          </button>
-        ))}
-      </section>
+      {/* Lift summary card — tappable, links to /lift */}
+      <Link
+        href="/lift"
+        className="block mb-6 p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 active:scale-[0.98] transition-transform"
+      >
+        <div className="flex items-baseline justify-between">
+          <h2 className="text-sm font-medium text-zinc-500">Lifts this week</h2>
+          <span className="text-sm text-zinc-500">
+            Goal: {WEEKLY_LIFTS_GOAL}
+          </span>
+        </div>
+        <div className="mt-2 text-3xl font-bold">
+          {weekLifts.length}
+          <span className="text-base font-normal text-zinc-500">
+            {" "}
+            / {WEEKLY_LIFTS_GOAL} sessions
+          </span>
+        </div>
+        <div className="mt-3 h-2 w-full rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
+          <div
+            className="h-full bg-blue-500 transition-all duration-500"
+            style={{ width: `${liftGoalPercent}%` }}
+          />
+        </div>
+        {lastLift ? (
+          <p className="mt-3 text-xs text-zinc-600 dark:text-zinc-400">
+            Last: 🏋️ {lastLift.template_name} · {relativeLabel(lastLift.date)}
+          </p>
+        ) : (
+          <p className="mt-3 text-xs text-zinc-400">
+            No lifts yet this week — tap to start one
+          </p>
+        )}
+      </Link>
 
-      {/* Feedback banners */}
-      {saving && (
-        <div className="mt-6 p-4 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-center text-sm">
-          Saving…
-        </div>
-      )}
-      {lastLogged && !saving && !errorMsg && (
-        <div className="mt-6 p-4 rounded-xl bg-green-100 dark:bg-green-900/30 text-green-900 dark:text-green-200 text-center">
-          Logged {lastLogged} ✓
-        </div>
-      )}
-      {errorMsg && (
-        <div className="mt-6 p-4 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-900 dark:text-red-200 text-center text-sm">
-          {errorMsg}
-        </div>
-      )}
-
-      {/* This week's classes — for quick recovery from misclicks */}
-      {weekSessions.length > 0 && (
-        <section className="mt-8">
+      {/* Recent notes — last few training notes as quote cards.
+          Surfaces your past learnings so you see them before your next class. */}
+      {recentNotes.length > 0 && (
+        <section className="mt-4">
           <h3 className="text-sm font-medium text-zinc-500 mb-2">
-            This week&apos;s classes
+            Recent notes
           </h3>
           <ul className="space-y-2">
-            {weekSessions.map((s) => (
+            {recentNotes.map((s) => (
               <li
                 key={s.id}
-                className="flex items-center gap-3 p-3 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
+                className="p-4 rounded-xl bg-white dark:bg-zinc-900 border-l-4 border-l-green-500 border-y border-r border-zinc-200 dark:border-zinc-800"
               >
-                <span className="text-2xl">
-                  {emojiByDiscipline[s.discipline] ?? "•"}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold truncate">
-                    {s.discipline}
-                  </div>
-                  <div className="text-xs text-zinc-500">
-                    {relativeLabel(s.date)} · {s.duration_min} min
-                  </div>
+                <div className="flex items-center gap-2 text-xs text-zinc-500 mb-1">
+                  <span>{emojiByDiscipline[s.discipline] ?? "•"}</span>
+                  <span className="font-semibold">{s.discipline}</span>
+                  <span>·</span>
+                  <span>{relativeLabel(s.date)}</span>
                 </div>
-                <button
-                  onClick={() => handleDelete(s.id)}
-                  className="text-zinc-400 hover:text-red-500 text-xl px-2"
-                  aria-label="Delete class"
-                >
-                  ×
-                </button>
+                <p className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap line-clamp-4">
+                  {s.notes}
+                </p>
               </li>
             ))}
           </ul>
         </section>
+      )}
+
+      {loading && (
+        <p className="mt-6 text-center text-xs text-zinc-500">Loading…</p>
       )}
     </main>
   );
