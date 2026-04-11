@@ -86,6 +86,11 @@ export default function LiftPage() {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // Names of exercises the user chose to skip in the current workout only.
+  // A Set is used because lookup is O(1) and we don't care about order.
+  // Resets every time a new template is started.
+  const [hiddenExercises, setHiddenExercises] = useState<Set<string>>(new Set());
+
   // The date we're logging FOR. Defaults to today; user can change it
   // to back-date a workout they did earlier but forgot to log.
   const [logDate, setLogDate] = useState<string>(todayLocal());
@@ -97,6 +102,8 @@ export default function LiftPage() {
     setActiveTemplate(template);
     setSuccessMsg(null);
     setErrorMsg(null);
+    // Start with no exercises hidden — fresh workout, full template visible.
+    setHiddenExercises(new Set());
 
     // Initialize the form: each exercise starts with `targetSets` empty rows.
     const initial: Record<string, ExerciseForm> = {};
@@ -109,6 +116,21 @@ export default function LiftPage() {
 
     // Fetch "last time" for each exercise in parallel.
     fetchLastTimes(template.exercises.map((e) => e.name));
+  }
+
+  // Hide one exercise from the active workout (e.g., "skip optional curls").
+  // Doesn't touch the underlying TEMPLATES — next workout it'll be back.
+  function hideExercise(name: string) {
+    setHiddenExercises((prev) => {
+      const next = new Set(prev);
+      next.add(name);
+      return next;
+    });
+  }
+
+  // Bring all skipped exercises back into view.
+  function unhideAll() {
+    setHiddenExercises(new Set());
   }
 
   async function fetchLastTimes(exerciseNames: string[]) {
@@ -185,6 +207,9 @@ export default function LiftPage() {
     }[] = [];
 
     for (const ex of activeTemplate.exercises) {
+      // Skip exercises the user hid from this workout — don't save empty rows
+      // for them and don't accidentally count them as part of the session.
+      if (hiddenExercises.has(ex.name)) continue;
       const form = forms[ex.name];
       if (!form) continue;
       form.sets.forEach((s, idx) => {
@@ -346,7 +371,11 @@ export default function LiftPage() {
       </header>
 
       <div className="space-y-4">
-        {activeTemplate.exercises.map((ex) => {
+        {activeTemplate.exercises
+          // Drop hidden exercises before rendering. They still exist in the
+          // template, just not on screen for this workout.
+          .filter((ex) => !hiddenExercises.has(ex.name))
+          .map((ex) => {
           const form = forms[ex.name];
           const last = lastTimes[ex.name];
           return (
@@ -355,10 +384,22 @@ export default function LiftPage() {
               className="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
             >
               <div className="flex items-baseline justify-between gap-2">
-                <h2 className="font-semibold leading-tight">{ex.name}</h2>
+                <h2 className="font-semibold leading-tight flex-1 min-w-0">{ex.name}</h2>
                 <span className="text-xs text-zinc-400 whitespace-nowrap">
                   {ex.targetSets} × {ex.targetReps}
                 </span>
+                <button
+                  onClick={() => {
+                    if (confirm(`Skip ${ex.name} for this workout?`)) {
+                      hideExercise(ex.name);
+                    }
+                  }}
+                  className="text-zinc-400 hover:text-red-500 text-lg leading-none px-1"
+                  aria-label={`Skip ${ex.name}`}
+                  title="Skip this exercise"
+                >
+                  ×
+                </button>
               </div>
               {ex.note && (
                 <p className="text-xs text-zinc-500 mt-1">{ex.note}</p>
@@ -415,6 +456,17 @@ export default function LiftPage() {
           );
         })}
       </div>
+
+      {/* "Show skipped" undo strip — only renders when at least one is hidden */}
+      {hiddenExercises.size > 0 && (
+        <button
+          onClick={unhideAll}
+          className="mt-4 w-full py-2 text-xs text-zinc-500 hover:text-green-600 dark:hover:text-green-400 underline"
+        >
+          Show {hiddenExercises.size} skipped exercise
+          {hiddenExercises.size === 1 ? "" : "s"}
+        </button>
+      )}
 
       {errorMsg && (
         <div className="mt-4 p-4 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-900 dark:text-red-200 text-center text-sm">
