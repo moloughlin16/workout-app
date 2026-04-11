@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { startOfWeekLocal, relativeLabel } from "@/lib/date";
+import WeeklyMartialArtsChart from "@/components/WeeklyMartialArtsChart";
 
 // Kept in sync with martial arts page. If you add a discipline, update both.
 const DISCIPLINES = [
@@ -197,6 +198,9 @@ export default function HomePage() {
           </p>
         )}
       </Link>
+
+      {/* Weekly martial arts bar chart — 8-week training history */}
+      <WeeklyMartialArtsChart />
 
       {/* Recent notes — last few training notes as quote cards.
           Surfaces your past learnings so you see them before your next class. */}
