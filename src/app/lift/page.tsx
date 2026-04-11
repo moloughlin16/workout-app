@@ -131,6 +131,19 @@ export default function LiftPage() {
   // Which exercise's chart is currently expanded in the Progress section.
   const [openExercise, setOpenExercise] = useState<string | null>(null);
 
+  // Personal records detected in the just-finished workout. Cleared when
+  // the user starts a new session or dismisses the celebration banner.
+  // Each PR records the exercise, the new value, and whether it was a
+  // weight PR or a reps PR (so the UI can label it correctly).
+  type PR = {
+    exerciseName: string;
+    metric: "weight" | "reps";
+    newValue: number;
+    previous: number;
+    unit: "lb" | "reps" | "sec";
+  };
+  const [newPRs, setNewPRs] = useState<PR[]>([]);
+
   // Edit mode: when non-null, we're editing a past session instead of
   // logging a new one. `editGroups` holds the exercise→sets structure that
   // the edit view renders.
@@ -229,6 +242,8 @@ export default function LiftPage() {
     setActiveTemplate(template);
     setSuccessMsg(null);
     setErrorMsg(null);
+    // Dismiss any lingering PR celebration from the previous workout.
+    setNewPRs([]);
     // Start with no exercises hidden — fresh workout, full template visible.
     setHiddenExercises(new Set());
 
@@ -319,6 +334,124 @@ export default function LiftPage() {
     });
   }
 
+  // Detect PRs for the just-saved workout.
+  //
+  // For each exercise in the workout:
+  //   1. Fetch all historical sets for that exercise, excluding the current
+  //      session's rows (one query, filtered by `session_id`).
+  //   2. Compute the historical max weight and max reps.
+  //   3. Compute the workout's best weight and best reps.
+  //   4. If the exercise has *any* history and the new best strictly beats
+  //      the historical max on the "natural" metric, it's a PR.
+  //        - Natural metric = weight if there's any historical or new weight.
+  //        - Otherwise = reps (which covers BW exercises and Plank seconds).
+  //   5. First-ever session for an exercise: no PR.
+  async function detectPRs(
+    currentSessionId: string,
+    savedSets: {
+      exercise_name: string;
+      weight_lb: number | null;
+      reps: number | null;
+    }[]
+  ): Promise<PR[]> {
+    // Group new best values by exercise.
+    const newBestWeight: Record<string, number> = {};
+    const newBestReps: Record<string, number> = {};
+    for (const s of savedSets) {
+      if (s.weight_lb != null && s.weight_lb > (newBestWeight[s.exercise_name] ?? -Infinity)) {
+        newBestWeight[s.exercise_name] = s.weight_lb;
+      }
+      if (s.reps != null && s.reps > (newBestReps[s.exercise_name] ?? -Infinity)) {
+        newBestReps[s.exercise_name] = s.reps;
+      }
+    }
+
+    const exercises = Array.from(
+      new Set(savedSets.map((s) => s.exercise_name))
+    );
+
+    // Fetch historical data for just these exercises, excluding the current
+    // session we just saved. We use `in` to batch the exercise names into
+    // one query.
+    const { data, error } = await supabase
+      .from("lift_sets")
+      .select("exercise_name, weight_lb, reps")
+      .in("exercise_name", exercises)
+      .neq("session_id", currentSessionId);
+
+    if (error) {
+      console.error("Failed to load history for PR check:", error.message);
+      return [];
+    }
+
+    type HistRow = {
+      exercise_name: string;
+      weight_lb: number | null;
+      reps: number | null;
+    };
+    const histMaxWeight: Record<string, number> = {};
+    const histMaxReps: Record<string, number> = {};
+    const hasHistory: Record<string, boolean> = {};
+    for (const row of (data ?? []) as HistRow[]) {
+      hasHistory[row.exercise_name] = true;
+      if (
+        row.weight_lb != null &&
+        row.weight_lb > (histMaxWeight[row.exercise_name] ?? -Infinity)
+      ) {
+        histMaxWeight[row.exercise_name] = row.weight_lb;
+      }
+      if (
+        row.reps != null &&
+        row.reps > (histMaxReps[row.exercise_name] ?? -Infinity)
+      ) {
+        histMaxReps[row.exercise_name] = row.reps;
+      }
+    }
+
+    const prs: PR[] = [];
+    for (const name of exercises) {
+      // First-ever session for this exercise → no PR (every value would
+      // technically be a "record" and that's just noise).
+      if (!hasHistory[name]) continue;
+
+      // Pick the metric: if either historical or new data has a weight,
+      // compare on weight. Otherwise compare on reps.
+      const hasWeight =
+        (histMaxWeight[name] ?? 0) > 0 || (newBestWeight[name] ?? 0) > 0;
+
+      if (hasWeight) {
+        const newMax = newBestWeight[name] ?? -Infinity;
+        const prevMax = histMaxWeight[name] ?? -Infinity;
+        if (newMax > prevMax && newMax > 0) {
+          prs.push({
+            exerciseName: name,
+            metric: "weight",
+            newValue: newMax,
+            previous: prevMax === -Infinity ? 0 : prevMax,
+            unit: "lb",
+          });
+        }
+      } else {
+        const newMax = newBestReps[name] ?? -Infinity;
+        const prevMax = histMaxReps[name] ?? -Infinity;
+        if (newMax > prevMax && newMax > 0) {
+          // Plank stores seconds in the reps column — look up the template
+          // to label correctly.
+          const u = unitFor(name);
+          prs.push({
+            exerciseName: name,
+            metric: "reps",
+            newValue: newMax,
+            previous: prevMax === -Infinity ? 0 : prevMax,
+            unit: u === "sec" ? "sec" : "reps",
+          });
+        }
+      }
+    }
+
+    return prs;
+  }
+
   async function finishWorkout() {
     if (!activeTemplate) return;
     setSaving(true);
@@ -387,6 +520,12 @@ export default function LiftPage() {
       setSaving(false);
       return;
     }
+
+    // Check for PRs against historical data (excluding the session we
+    // just saved). This runs in the background but we `await` it so the
+    // success banner shows the right count before we navigate away.
+    const prs = await detectPRs(sessionData.id, allSets);
+    setNewPRs(prs);
 
     setSuccessMsg(`Saved ${allSets.length} sets 💪`);
     setSaving(false);
@@ -761,6 +900,44 @@ export default function LiftPage() {
         {successMsg && (
           <div className="mb-4 p-4 rounded-xl bg-green-100 dark:bg-green-900/30 text-green-900 dark:text-green-200 text-center">
             {successMsg}
+          </div>
+        )}
+
+        {/* PR celebration banner — only renders if the last workout beat
+            any historical records. Dismissable. */}
+        {newPRs.length > 0 && (
+          <div className="mb-4 p-4 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-300 dark:border-amber-700/50">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1">
+                  🏆 New PR{newPRs.length > 1 ? "s" : ""}!
+                </div>
+                <ul className="mt-2 space-y-1 text-sm text-amber-900 dark:text-amber-200">
+                  {newPRs.map((pr) => (
+                    <li key={pr.exerciseName}>
+                      <span className="font-semibold">{pr.exerciseName}</span>
+                      {" — "}
+                      <span>
+                        {pr.newValue} {pr.unit}
+                      </span>
+                      {pr.previous > 0 && (
+                        <span className="text-xs text-amber-700 dark:text-amber-400">
+                          {" "}
+                          (was {pr.previous})
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <button
+                onClick={() => setNewPRs([])}
+                className="text-amber-700 dark:text-amber-400 text-xl leading-none px-1"
+                aria-label="Dismiss"
+              >
+                ×
+              </button>
+            </div>
           </div>
         )}
 
