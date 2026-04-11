@@ -18,7 +18,8 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
 ## Tech stack
 
 - **Next.js 16** (App Router) + **TypeScript** + **Tailwind CSS v4**
-- **Supabase** (Postgres + auth) — NOT YET SET UP
+- **Supabase** (Postgres) — set up, project `njyhpgxyvcxbnnqqjufj`, anon key in `.env.local`
+- **GitHub** — `https://github.com/moloughlin16/workout-app` (push works without PAT, creds cached in macOS Keychain)
 - **Vercel** for deployment — NOT YET SET UP
 - **Claude API** for AI features — future phase
 
@@ -39,29 +40,47 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
 - [x] Replaced starter page with martial arts quick-log buttons (4 disciplines: MMA, Kickboxing, Grappling, Sparring)
 - [x] Client-side state with `useState` showing "Logged X ✓" confirmation
 - [x] `git init` + first commit
-- [ ] GitHub remote — TBD
-- [ ] Supabase setup — NEXT
+- [x] GitHub remote set up, push works
+- [x] Supabase project created, `.env.local` populated with URL + anon key
+- [x] `martial_arts_sessions` table created with RLS + permissive anon policy
+- [x] `@supabase/supabase-js` installed, `src/lib/supabase.ts` client created
+- [x] `handleLog` wired to insert rows
+- [x] Weekly progress panel: hours + class count + progress bar + per-discipline breakdown
+- [x] Loading/saving/error UI states
+
+### Database schema
+
+**martial_arts_sessions**
+- id (uuid pk, default gen_random_uuid)
+- date (date, default current_date)
+- discipline (text, check: MMA/Kickboxing/Grappling/Sparring)
+- duration_min (int, default 60)
+- notes (text, nullable)
+- created_at (timestamptz, default now)
+- RLS enabled, policy "allow all for anon" (FOR ALL, USING true, WITH CHECK true)
 
 ### Next session plan
 
-**Phase 1, Feature 1: make the buttons actually save to a real database.**
+**Phase 1, Feature 2: lift tracker with Day A / Day B templates.**
 
-1. User creates free Supabase account at supabase.com
-2. Create project, grab URL + anon key, put in `.env.local`
-3. Create `martial_arts_sessions` table via SQL editor:
-   - id (uuid, pk, default gen_random_uuid())
-   - user_id (uuid, nullable for now — single-user app)
-   - date (date, default current_date)
-   - discipline (text, check constraint on MMA/Kickboxing/Grappling/Sparring)
-   - duration_min (int, default 60)
-   - notes (text, nullable)
-   - created_at (timestamptz, default now())
-4. `npm install @supabase/supabase-js`
-5. Create `src/lib/supabase.ts` client
-6. Wire `handleLog` in `src/app/page.tsx` to insert a row
-7. Add "This week" hours counter at top of page (fetch + sum)
-8. Show loading state + error handling
-9. Teach user how to view rows in Supabase dashboard
+1. Design schema: `exercises`, `workout_templates`, `lift_sessions`, `lift_sets`
+2. Seed the user's Day A / Day B templates (see below — use SQL or a Supabase seed script)
+3. New route `/lift` for lifting workouts (create `src/app/lift/page.tsx`)
+4. UI: pick day → see list of exercises with last-time weights → enter sets (weight/reps) → save
+5. "Last time" reference fetched per exercise for quick comparison
+6. Minimal bottom nav so user can flip between home (martial arts) and /lift
+7. RPE field (optional, 1-10 scale)
+8. Commit + push
+
+**Also worth tackling in the same session (if time):**
+- Add a small "recent sessions" list on the martial arts page (last 5 classes)
+- Add long-press or edit-on-tap on a class to change duration/delete (right now it's always 60 min)
+
+### Known followups / debt
+- Auth not set up — currently using permissive RLS policy. Fine for personal use but MUST add auth before sharing or deploying publicly.
+- Edit/delete UX: no way to fix a misclick yet. Add either swipe-to-delete or a "recent sessions" list with edit buttons.
+- Class duration hardcoded to 60. Add a long-press to enter custom duration for sparring or extra-long classes.
+- No date picker — all logs go to "today". Add back-dating for end-of-day logging of yesterday's classes.
 
 ### Roadmap after that (do not build yet — order subject to change)
 
