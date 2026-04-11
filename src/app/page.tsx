@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { startOfWeekLocal, relativeLabel } from "@/lib/date";
+import { extractTags } from "@/lib/tags";
 import WeeklyMartialArtsChart from "@/components/WeeklyMartialArtsChart";
+import NoteText from "@/components/NoteText";
 
 // Kept in sync with martial arts page. If you add a discipline, update both.
 const DISCIPLINES = [
@@ -41,14 +43,20 @@ export default function HomePage() {
   // "what have you been working on" feed. Surfaces your past learnings so
   // you're reminded of them before your next class.
   const [recentNotes, setRecentNotes] = useState<Session[]>([]);
+  // All tags that appear in any note, counted across all time. Drives the
+  // Tags section; each tag links to /notes?tag=xxx for browsing.
+  const [tagCounts, setTagCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Run all three fetches in parallel — they're independent, so waiting
+    // Run all fetches in parallel — they're independent, so waiting
     // for one before starting the next would be pointlessly slow.
-    Promise.all([loadWeekSessions(), loadWeekLifts(), loadRecentNotes()]).then(
-      () => setLoading(false)
-    );
+    Promise.all([
+      loadWeekSessions(),
+      loadWeekLifts(),
+      loadRecentNotes(),
+      loadTagCounts(),
+    ]).then(() => setLoading(false));
   }, []);
 
   async function loadWeekSessions() {
@@ -94,6 +102,28 @@ export default function HomePage() {
     setRecentNotes(filtered);
   }
 
+  // Fetch the `notes` column from every session that has one and count
+  // how often each tag appears. We fetch just the notes column (tiny
+  // payload) and do the tag extraction client-side.
+  async function loadTagCounts() {
+    const { data, error } = await supabase
+      .from("martial_arts_sessions")
+      .select("notes")
+      .not("notes", "is", null);
+
+    if (error) {
+      console.error("Failed to load tag counts:", error.message);
+      return;
+    }
+    const counts: Record<string, number> = {};
+    for (const row of (data ?? []) as { notes: string | null }[]) {
+      for (const tag of extractTags(row.notes)) {
+        counts[tag] = (counts[tag] ?? 0) + 1;
+      }
+    }
+    setTagCounts(counts);
+  }
+
   // Lookup: emoji by discipline name, for the recent-notes section.
   const emojiByDiscipline: Record<string, string> = Object.fromEntries(
     DISCIPLINES.map((d) => [d.key, d.emoji])
@@ -115,6 +145,12 @@ export default function HomePage() {
     100,
     (weekLifts.length / WEEKLY_LIFTS_GOAL) * 100
   );
+
+  // Top tags sorted by frequency desc, then alphabetically as a tiebreaker.
+  // Limit to the top 12 so the pill cloud stays readable on mobile.
+  const sortedTags = Object.entries(tagCounts)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 12);
 
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 max-w-md mx-auto">
@@ -206,9 +242,15 @@ export default function HomePage() {
           Surfaces your past learnings so you see them before your next class. */}
       {recentNotes.length > 0 && (
         <section className="mt-4">
-          <h3 className="text-sm font-medium text-zinc-500 mb-2">
-            Recent notes
-          </h3>
+          <div className="flex items-baseline justify-between mb-2">
+            <h3 className="text-sm font-medium text-zinc-500">Recent notes</h3>
+            <Link
+              href="/notes"
+              className="text-xs text-green-600 dark:text-green-400 font-medium"
+            >
+              View all
+            </Link>
+          </div>
           <ul className="space-y-2">
             {recentNotes.map((s) => (
               <li
@@ -222,11 +264,32 @@ export default function HomePage() {
                   <span>{relativeLabel(s.date)}</span>
                 </div>
                 <p className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap line-clamp-4">
-                  {s.notes}
+                  <NoteText text={s.notes ?? ""} />
                 </p>
               </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {/* Tags cloud — top recurring topics from your notes. Tap to filter. */}
+      {sortedTags.length > 0 && (
+        <section className="mt-6">
+          <h3 className="text-sm font-medium text-zinc-500 mb-2">Tags</h3>
+          <div className="flex flex-wrap gap-2">
+            {sortedTags.map(([tag, count]) => (
+              <Link
+                key={tag}
+                href={`/notes?tag=${encodeURIComponent(tag)}`}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 text-xs font-medium hover:bg-green-200 dark:hover:bg-green-900/50"
+              >
+                <span>#{tag}</span>
+                <span className="text-green-600 dark:text-green-500">
+                  {count}
+                </span>
+              </Link>
+            ))}
+          </div>
         </section>
       )}
 

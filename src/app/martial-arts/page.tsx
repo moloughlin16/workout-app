@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { todayLocal, startOfWeekLocal, relativeLabel } from "@/lib/date";
+import NoteText from "@/components/NoteText";
 
 // The four martial arts disciplines we want to track.
 // `key` is what we store in the database; `label` is what we show on the button.
@@ -302,7 +303,7 @@ export default function MartialArtsPage() {
                         </div>
                         {hasNote && !isExpanded && (
                           <div className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 line-clamp-2 whitespace-pre-wrap">
-                            {s.notes}
+                            <NoteText text={s.notes ?? ""} />
                           </div>
                         )}
                       </div>
@@ -326,7 +327,7 @@ export default function MartialArtsPage() {
                             [s.id]: e.target.value,
                           }))
                         }
-                        placeholder="What did you learn? What did you struggle with? What are you focusing on?"
+                        placeholder="What did you learn? What did you struggle with? Use #tags to group topics (e.g. #guard-retention)."
                         rows={4}
                         className="w-full text-sm p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-green-500"
                       />
