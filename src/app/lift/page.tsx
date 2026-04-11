@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { todayLocal, relativeLabel } from "@/lib/date";
+import ExerciseProgressChart from "@/components/ExerciseProgressChart";
 
 // ============================================================
 // TEMPLATE DEFINITIONS
@@ -124,6 +125,12 @@ export default function LiftPage() {
   const [pastSessions, setPastSessions] = useState<PastSession[]>([]);
   const [loadingPast, setLoadingPast] = useState(true);
 
+  // Distinct exercise names that have at least one logged set, ordered
+  // by most recent first. Drives the "Progress" section on the picker view.
+  const [exerciseHistory, setExerciseHistory] = useState<string[]>([]);
+  // Which exercise's chart is currently expanded in the Progress section.
+  const [openExercise, setOpenExercise] = useState<string | null>(null);
+
   // Edit mode: when non-null, we're editing a past session instead of
   // logging a new one. `editGroups` holds the exercise→sets structure that
   // the edit view renders.
@@ -143,7 +150,45 @@ export default function LiftPage() {
   // Load the recent past sessions list when the picker view first mounts.
   useEffect(() => {
     loadPastSessions();
+    loadExerciseHistory();
   }, []);
+
+  // Fetch distinct exercise names across all time, ordered by most recent.
+  // Supabase/PostgREST has no DISTINCT operator, so we fetch the name column
+  // ordered by created_at desc and dedupe client-side using a Set. For the
+  // data volumes we expect (hundreds of rows max) this is fine.
+  async function loadExerciseHistory() {
+    const { data, error } = await supabase
+      .from("lift_sets")
+      .select("exercise_name, created_at")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Failed to load exercise history:", error.message);
+      return;
+    }
+
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    for (const row of (data ?? []) as { exercise_name: string }[]) {
+      if (!seen.has(row.exercise_name)) {
+        seen.add(row.exercise_name);
+        ordered.push(row.exercise_name);
+      }
+    }
+    setExerciseHistory(ordered);
+  }
+
+  // Look up an exercise's `unit` from the templates so the chart knows
+  // whether to label the Y axis "reps" or "sec". Returns undefined if
+  // the exercise isn't in any current template (e.g. renamed/removed).
+  function unitFor(exerciseName: string): "reps" | "sec" | undefined {
+    for (const t of TEMPLATES) {
+      const match = t.exercises.find((e) => e.name === exerciseName);
+      if (match) return match.unit ?? "reps";
+    }
+    return undefined;
+  }
 
   async function loadPastSessions() {
     setLoadingPast(true);
@@ -350,6 +395,7 @@ export default function LiftPage() {
     setForms({});
     // Refresh the recent-sessions list so the new workout shows up.
     loadPastSessions();
+    loadExerciseHistory();
   }
 
   function cancelWorkout() {
@@ -519,6 +565,7 @@ export default function LiftPage() {
     setEditGroups([]);
     // Refresh the picker list so counts and most-recent order are correct.
     loadPastSessions();
+    loadExerciseHistory();
   }
 
   // Delete an entire session. The FK on lift_sets has ON DELETE CASCADE,
@@ -553,6 +600,9 @@ export default function LiftPage() {
       setEditingSession(null);
       setEditGroups([]);
     }
+    // Refresh exercise history in case this was the only session for
+    // some exercise — that exercise should disappear from Progress.
+    loadExerciseHistory();
   }
 
   // ============================================================
@@ -772,6 +822,49 @@ export default function LiftPage() {
             ))}
           </ul>
         </section>
+
+        {/* Progress — tap an exercise to see its history chart */}
+        {exerciseHistory.length > 0 && (
+          <section className="mt-8 mb-4">
+            <h3 className="text-sm font-medium text-zinc-500 mb-2">
+              Progress
+            </h3>
+            <ul className="space-y-2">
+              {exerciseHistory.map((name) => {
+                const isOpen = openExercise === name;
+                return (
+                  <li
+                    key={name}
+                    className="rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 overflow-hidden"
+                  >
+                    <button
+                      onClick={() =>
+                        setOpenExercise(isOpen ? null : name)
+                      }
+                      className="w-full text-left p-3 flex items-center justify-between gap-3"
+                      aria-expanded={isOpen}
+                    >
+                      <span className="text-sm font-semibold truncate flex-1 min-w-0">
+                        {name}
+                      </span>
+                      <span className="text-xs text-zinc-400">
+                        {isOpen ? "Hide" : "View"}
+                      </span>
+                    </button>
+                    {isOpen && (
+                      <div className="px-3 pb-3 border-t border-zinc-100 dark:border-zinc-800 pt-3">
+                        <ExerciseProgressChart
+                          exerciseName={name}
+                          unit={unitFor(name)}
+                        />
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
       </main>
     );
   }
