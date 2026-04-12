@@ -48,6 +48,11 @@ export default function HomePage() {
   const [tagCounts, setTagCounts] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
+  // AI weekly summary state
+  const [summary, setSummary] = useState<string | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+
   useEffect(() => {
     // Run all fetches in parallel — they're independent, so waiting
     // for one before starting the next would be pointlessly slow.
@@ -122,6 +127,26 @@ export default function HomePage() {
       }
     }
     setTagCounts(counts);
+  }
+
+  // Calls our server-side API route to generate a weekly summary via Gemini.
+  // The API key never leaves the server — the browser just gets the summary text back.
+  async function generateSummary() {
+    setSummaryLoading(true);
+    setSummaryError(null);
+    try {
+      const res = await fetch("/api/summary", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setSummaryError(data.error || "Something went wrong");
+      } else {
+        setSummary(data.summary);
+      }
+    } catch {
+      setSummaryError("Network error — are you online?");
+    } finally {
+      setSummaryLoading(false);
+    }
   }
 
   // Lookup: emoji by discipline name, for the recent-notes section.
@@ -237,6 +262,65 @@ export default function HomePage() {
 
       {/* Weekly martial arts bar chart — 8-week training history */}
       <WeeklyMartialArtsChart />
+
+      {/* AI Weekly Summary — calls Gemini via our server-side API route.
+          Only shown after the user taps the button (not auto-generated)
+          so we don't burn API calls on every page load. */}
+      <section className="mt-4">
+        {!summary && !summaryLoading && (
+          <button
+            onClick={generateSummary}
+            disabled={loading}
+            className="w-full py-3.5 rounded-2xl bg-purple-600 text-white font-semibold text-sm active:scale-[0.98] transition-transform disabled:opacity-50"
+          >
+            ✨ Summarize my week
+          </button>
+        )}
+        {summaryLoading && (
+          <div className="p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-center">
+            <div className="inline-block animate-spin mr-2">✨</div>
+            <span className="text-sm text-zinc-500">Generating your summary…</span>
+          </div>
+        )}
+        {summaryError && (
+          <div className="p-4 rounded-2xl bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
+            {summaryError}
+            <button
+              onClick={generateSummary}
+              className="ml-2 underline font-medium"
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        {summary && (
+          <div className="p-5 rounded-2xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-purple-700 dark:text-purple-300">
+                ✨ AI Weekly Summary
+              </h3>
+              <button
+                onClick={() => {
+                  setSummary(null);
+                  setSummaryError(null);
+                }}
+                className="text-xs text-purple-500 hover:text-purple-700 dark:hover:text-purple-300"
+              >
+                Dismiss
+              </button>
+            </div>
+            <p className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap leading-relaxed">
+              {summary}
+            </p>
+            <button
+              onClick={generateSummary}
+              className="mt-3 text-xs text-purple-600 dark:text-purple-400 font-medium hover:underline"
+            >
+              Regenerate
+            </button>
+          </div>
+        )}
+      </section>
 
       {/* Recent notes — last few training notes as quote cards.
           Surfaces your past learnings so you see them before your next class. */}
