@@ -1,15 +1,20 @@
-// POST /api/summary — AI-powered weekly training summary.
+// POST /api/summary — AI-powered weekly training summary with caching.
 //
 // This is a Next.js "Route Handler" — it runs on the server, never in the
 // browser. That's important because:
 //   1. The CLAUDE_API_KEY env var is only available server-side (no NEXT_PUBLIC_ prefix).
 //   2. We don't want to expose our API key in the browser's network tab.
 //
-// The flow:
-//   Browser clicks "Summarize my week" → fetch("/api/summary", { method: "POST" })
-//   → this code runs on Vercel's server → queries Supabase → calls Claude → returns JSON.
+// Caching strategy:
+//   - Each generated summary is saved to the `weekly_summaries` table keyed
+//     by week_start (Monday's date). If a cached summary exists, we return
+//     it immediately without calling Claude — zero API cost.
+//   - The client can pass ?force=true to regenerate (e.g. the "Regenerate"
+//     button). This bypasses the cache and upserts the new summary.
+//   - Past-week summaries are essentially permanent. Current-week summaries
+//     can be refreshed as new training data comes in.
 
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 
@@ -19,7 +24,17 @@ const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 );
 
-export async function POST() {
+/** Returns YYYY-MM-DD for Monday of the current week. */
+function getWeekStart(): string {
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun … 6=Sat
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + diff);
+  return monday.toISOString().split("T")[0];
+}
+
+export async function POST(request: NextRequest) {
   // ── 1. Check for API key ──────────────────────────────────────────
   // Named CLAUDE_API_KEY (not ANTHROPIC_API_KEY) to avoid collision with
   // Claude Code's own environment variable of the same name.
@@ -32,34 +47,38 @@ export async function POST() {
   }
 
   try {
-    // ── 2. Figure out Monday of this week (local-ish) ───────────────
-    // Server runs in UTC on Vercel, but we store dates in user's local
-    // time. This is close enough — worst case near midnight UTC we
-    // include/exclude a day at the edge of the week. Fine for a summary.
-    const now = new Date();
-    const day = now.getDay(); // 0=Sun … 6=Sat
-    const diff = day === 0 ? -6 : 1 - day;
-    const monday = new Date(now);
-    monday.setDate(now.getDate() + diff);
-    const weekStart = monday.toISOString().split("T")[0];
+    const weekStart = getWeekStart();
 
-    // ── 3. Fetch this week's data in parallel ───────────────────────
+    // ── 2. Check cache (unless force=true) ──────────────────────────
+    const force = request.nextUrl.searchParams.get("force") === "true";
+
+    if (!force) {
+      const { data: cached } = await supabase
+        .from("weekly_summaries")
+        .select("summary")
+        .eq("week_start", weekStart)
+        .single();
+
+      if (cached) {
+        // Cache hit — return immediately, no Claude API call needed.
+        return NextResponse.json({ summary: cached.summary, cached: true });
+      }
+    }
+
+    // ── 3. Fetch this week's training data in parallel ──────────────
     const [maResult, liftResult, setsResult] = await Promise.all([
-      // All martial arts sessions this week
       supabase
         .from("martial_arts_sessions")
         .select("date, discipline, duration_min, notes")
         .gte("date", weekStart)
         .order("date", { ascending: true }),
 
-      // All lift sessions this week
       supabase
         .from("lift_sessions")
         .select("id, date, template_name")
         .gte("date", weekStart)
         .order("date", { ascending: true }),
 
-      // All lift sets this week (we'll match them to sessions below)
       supabase
         .from("lift_sets")
         .select("session_id, exercise_name, weight_lb, reps, set_number")
@@ -80,11 +99,8 @@ export async function POST() {
     }
 
     // ── 4. Build a text representation of the week's training ───────
-    // We feed this to Claude as context. Plain text is fine — the model
-    // doesn't need JSON, it just needs the information.
     let trainingData = "## This Week's Training Data\n\n";
 
-    // Martial arts
     if (maSessions.length > 0) {
       const totalMin = maSessions.reduce((s, r) => s + r.duration_min, 0);
       trainingData += `### Martial Arts (${maSessions.length} sessions, ${(totalMin / 60).toFixed(1)} hours)\n`;
@@ -96,16 +112,13 @@ export async function POST() {
       trainingData += "\n";
     }
 
-    // Lifting
     if (liftSessions.length > 0) {
       trainingData += `### Lifting (${liftSessions.length} sessions)\n`;
       for (const session of liftSessions) {
         trainingData += `- ${session.date} | ${session.template_name}\n`;
-        // Find sets for this session
         const sessionSets = liftSets.filter(
           (s) => s.session_id === session.id
         );
-        // Group by exercise
         const byExercise = new Map<
           string,
           { weight_lb: number | null; reps: number | null }[]
@@ -133,8 +146,6 @@ export async function POST() {
     }
 
     // ── 5. Call Claude ──────────────────────────────────────────────
-    // Claude Sonnet 4 — great quality, roughly ~$0.01 per summary.
-    // $5 of credits ≈ 500 summaries.
     const anthropic = new Anthropic({ apiKey });
 
     const message = await anthropic.messages.create({
@@ -160,15 +171,24 @@ Write a concise weekly training summary (150-250 words). Include:
       ],
     });
 
-    // Extract the text from Claude's response.
-    // Claude returns an array of "content blocks" — usually just one text block.
     const textBlock = message.content.find((block) => block.type === "text");
     const summary = textBlock ? textBlock.text : "No summary generated.";
 
-    return NextResponse.json({ summary });
+    // ── 6. Cache the summary ────────────────────────────────────────
+    // Upsert: if a row for this week already exists (from a previous
+    // "Regenerate"), update it instead of creating a duplicate.
+    await supabase.from("weekly_summaries").upsert(
+      {
+        week_start: weekStart,
+        summary,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "week_start" }
+    );
+
+    return NextResponse.json({ summary, cached: false });
   } catch (err) {
     console.error("Summary generation failed:", err);
-    // Surface a useful message based on error type
     let errorMessage = "Failed to generate summary. Please try again.";
     if (err instanceof Error) {
       if (err.message.includes("401") || err.message.includes("authentication")) {

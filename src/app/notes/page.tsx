@@ -37,6 +37,9 @@ function NotesBrowser() {
 
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
+  // Free-text search — matches note body OR any hashtag in the note.
+  // Debouncing isn't needed since filtering is instant (client-side, ~N rows).
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     loadNotes();
@@ -62,11 +65,30 @@ function NotesBrowser() {
     setLoading(false);
   }
 
-  // Apply the tag filter (if any) client-side: keep sessions whose notes
-  // contain this tag. We normalize via extractTags so matching ignores case.
-  const filtered = tagFilter
+  // Two-stage filter applied client-side:
+  //   1. If a tag is set via URL (?tag=xxx), keep only notes with that tag.
+  //   2. If the user typed in the search box, keep only notes whose body
+  //      OR any tag contains the search string (case-insensitive).
+  const tagFiltered = tagFilter
     ? sessions.filter((s) => extractTags(s.notes).includes(tagFilter))
     : sessions;
+
+  const searchTerm = search.trim().toLowerCase();
+  // Strip a leading '#' so typing "#guard" and "guard" both work.
+  const normalizedTerm = searchTerm.startsWith("#")
+    ? searchTerm.slice(1)
+    : searchTerm;
+
+  const filtered = normalizedTerm
+    ? tagFiltered.filter((s) => {
+        const noteText = (s.notes ?? "").toLowerCase();
+        const tags = extractTags(s.notes);
+        return (
+          noteText.includes(normalizedTerm) ||
+          tags.some((t) => t.includes(normalizedTerm))
+        );
+      })
+    : tagFiltered;
 
   return (
     <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 max-w-md mx-auto">
@@ -76,6 +98,27 @@ function NotesBrowser() {
           All training notes, newest first.
         </p>
       </header>
+
+      {/* Search input — filters by note body or hashtag. */}
+      <div className="mb-3 relative">
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search notes or #tags…"
+          className="w-full px-4 py-2.5 pr-10 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-green-500"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch("")}
+            aria-label="Clear search"
+            className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          >
+            ×
+          </button>
+        )}
+      </div>
 
       {/* Active filter banner */}
       {tagFilter && (
@@ -102,9 +145,11 @@ function NotesBrowser() {
 
       {!loading && filtered.length === 0 && (
         <p className="text-sm text-zinc-500">
-          {tagFilter
-            ? `No notes with #${tagFilter} yet.`
-            : "No notes yet. Tap a class on the Martial Arts tab and add one."}
+          {normalizedTerm
+            ? `No notes match "${search.trim()}".`
+            : tagFilter
+              ? `No notes with #${tagFilter} yet.`
+              : "No notes yet. Tap a class on the Martial Arts tab and add one."}
         </p>
       )}
 

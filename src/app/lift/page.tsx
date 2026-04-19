@@ -22,28 +22,30 @@ type ExerciseDef = {
 };
 
 type Template = {
-  name: "Day A" | "Day B";
+  name: "Full Body 1" | "Full Body 2";
   subtitle: string;
   exercises: ExerciseDef[];
 };
 
 const TEMPLATES: Template[] = [
   {
-    name: "Day A",
+    name: "Full Body 1",
     subtitle: "Strength — controlled, submaximal",
     exercises: [
       { name: "Squat (or Trap Bar DL)", targetSets: 4, targetReps: "3-5" },
       { name: "Bench Press", targetSets: 3, targetReps: "4-6" },
       { name: "Chest-Supported Row", targetSets: 3, targetReps: "6-10" },
+      { name: "Assisted Pull-ups", targetSets: 3, targetReps: "6-10" },
       { name: "Bulgarian Split Squat", targetSets: 3, targetReps: "6-8 ea" },
       { name: "Step-ups", targetSets: 3, targetReps: "6-10 ea", note: "bodyweight, controlled" },
+      { name: "Hamstring Curls", targetSets: 3, targetReps: "8-12" },
       { name: "Deadbugs", targetSets: 3, targetReps: "8-12 ea", note: "slow, full extension" },
       { name: "Plank", targetSets: 3, targetReps: "max", unit: "sec" },
       { name: "Hip Abduction (optional)", targetSets: 2, targetReps: "12-15" },
     ],
   },
   {
-    name: "Day B",
+    name: "Full Body 2",
     subtitle: "Power — explosive, upper-body bias",
     exercises: [
       { name: "Box Jumps", targetSets: 4, targetReps: "5-8", note: "full recovery" },
@@ -53,7 +55,6 @@ const TEMPLATES: Template[] = [
       { name: "Row (DB or cable)", targetSets: 3, targetReps: "6-10" },
       { name: "Lateral Raises", targetSets: 3, targetReps: "12-15" },
       { name: "Face Pulls / Rear Delts", targetSets: 3, targetReps: "12-15" },
-      { name: "Hamstring Curls", targetSets: 3, targetReps: "8-12" },
       { name: "Bicep Curls (optional)", targetSets: 2, targetReps: "10-15" },
       { name: "Tricep Pushdowns (optional)", targetSets: 2, targetReps: "10-15" },
     ],

@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { startOfWeekLocal, relativeLabel } from "@/lib/date";
 import { extractTags } from "@/lib/tags";
 import WeeklyMartialArtsChart from "@/components/WeeklyMartialArtsChart";
+import DisciplinePieChart from "@/components/DisciplinePieChart";
 import NoteText from "@/components/NoteText";
 
 // Kept in sync with martial arts page. If you add a discipline, update both.
@@ -61,6 +62,7 @@ export default function HomePage() {
       loadWeekLifts(),
       loadRecentNotes(),
       loadTagCounts(),
+      loadCachedSummary(),
     ]).then(() => setLoading(false));
   }, []);
 
@@ -129,13 +131,28 @@ export default function HomePage() {
     setTagCounts(counts);
   }
 
-  // Calls our server-side API route to generate a weekly summary via Gemini.
+  // Check if we already have a cached summary for this week in Supabase.
+  // This is a direct DB read — free, instant, no Claude API call needed.
+  async function loadCachedSummary() {
+    const { data } = await supabase
+      .from("weekly_summaries")
+      .select("summary")
+      .eq("week_start", startOfWeekLocal())
+      .single();
+    if (data) {
+      setSummary(data.summary);
+    }
+  }
+
+  // Calls our server-side API route to generate a weekly summary via Claude.
   // The API key never leaves the server — the browser just gets the summary text back.
-  async function generateSummary() {
+  // When force=true, it bypasses the cache and generates fresh (for "Regenerate").
+  async function generateSummary(force = false) {
     setSummaryLoading(true);
     setSummaryError(null);
     try {
-      const res = await fetch("/api/summary", { method: "POST" });
+      const url = force ? "/api/summary?force=true" : "/api/summary";
+      const res = await fetch(url, { method: "POST" });
       const data = await res.json();
       if (!res.ok) {
         setSummaryError(data.error || "Something went wrong");
@@ -263,13 +280,16 @@ export default function HomePage() {
       {/* Weekly martial arts bar chart — 8-week training history */}
       <WeeklyMartialArtsChart />
 
+      {/* All-time discipline breakdown pie chart */}
+      <DisciplinePieChart />
+
       {/* AI Weekly Summary — calls Gemini via our server-side API route.
           Only shown after the user taps the button (not auto-generated)
           so we don't burn API calls on every page load. */}
       <section className="mt-4">
         {!summary && !summaryLoading && (
           <button
-            onClick={generateSummary}
+            onClick={() => generateSummary()}
             disabled={loading}
             className="w-full py-3.5 rounded-2xl bg-purple-600 text-white font-semibold text-sm active:scale-[0.98] transition-transform disabled:opacity-50"
           >
@@ -286,7 +306,7 @@ export default function HomePage() {
           <div className="p-4 rounded-2xl bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-sm text-red-700 dark:text-red-300">
             {summaryError}
             <button
-              onClick={generateSummary}
+              onClick={() => generateSummary()}
               className="ml-2 underline font-medium"
             >
               Retry
@@ -313,7 +333,7 @@ export default function HomePage() {
               {summary}
             </p>
             <button
-              onClick={generateSummary}
+              onClick={() => generateSummary(true)}
               className="mt-3 text-xs text-purple-600 dark:text-purple-400 font-medium hover:underline"
             >
               Regenerate
