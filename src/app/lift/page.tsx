@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { todayLocal, relativeLabel } from "@/lib/date";
 import ExerciseProgressChart from "@/components/ExerciseProgressChart";
+import RestTimer from "@/components/RestTimer";
 
 // ============================================================
 // TEMPLATE DEFINITIONS
@@ -1071,6 +1072,10 @@ export default function LiftPage() {
           Cancel
         </button>
       </header>
+
+      {/* Rest timer — sticky at the top of the scroll container.
+          Tap a preset to start counting down between sets. */}
+      <RestTimer />
 
       <div className="space-y-4">
         {activeTemplate.exercises
