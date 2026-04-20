@@ -67,6 +67,48 @@ export function shortWeekLabel(dateStr: string): string {
 }
 
 /**
+ * Returns a YYYY-MM-DD date string `days` days after `dateStr`.
+ * Parses `dateStr` as local midnight so it doesn't drift across time zones.
+ */
+export function addDays(dateStr: string, days: number): string {
+  const [yyyy, mm, dd] = dateStr.split("-").map(Number);
+  const d = new Date(yyyy, mm - 1, dd);
+  d.setDate(d.getDate() + days);
+  return formatLocalDate(d);
+}
+
+/**
+ * Returns a short label for a week starting on `weekStart` (Monday),
+ * e.g. "Apr 6–12" or "Apr 28–May 4". The Sunday is weekStart + 6 days.
+ */
+export function weekRangeLabel(weekStart: string): string {
+  const end = addDays(weekStart, 6);
+  const [sy, sm, sd] = weekStart.split("-").map(Number);
+  const [ey, em, ed] = end.split("-").map(Number);
+  const start = new Date(sy, sm - 1, sd);
+  const finish = new Date(ey, em - 1, ed);
+  const startLabel = start.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+  // If both dates are in the same month, drop the month from the end.
+  // Otherwise show "Apr 28–May 4".
+  const sameMonth = sm === em;
+  const endLabel = sameMonth
+    ? finish.toLocaleDateString(undefined, { day: "numeric" })
+    : finish.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `${startLabel}–${endLabel}`;
+}
+
+/** Format "HH:MM" or "HH:MM:SS" to "5:45pm" style. */
+export function formatClockTime(time: string): string {
+  const [h, m] = time.split(":").map(Number);
+  const suffix = h >= 12 ? "pm" : "am";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return m === 0 ? `${h12}${suffix}` : `${h12}:${m.toString().padStart(2, "0")}${suffix}`;
+}
+
+/**
  * Human-friendly label for a YYYY-MM-DD date string.
  * "Today", "Yesterday", or e.g. "Mon, Apr 7".
  */

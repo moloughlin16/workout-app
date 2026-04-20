@@ -3,8 +3,14 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
-import { startOfWeekLocal, relativeLabel } from "@/lib/date";
+import {
+  addDays,
+  formatClockTime,
+  startOfWeekLocal,
+  relativeLabel,
+} from "@/lib/date";
 import { extractTags } from "@/lib/tags";
+import { buildCoachMessage } from "@/lib/coach-message";
 import WeeklyMartialArtsChart from "@/components/WeeklyMartialArtsChart";
 import DisciplinePieChart from "@/components/DisciplinePieChart";
 import NoteText from "@/components/NoteText";
@@ -37,6 +43,14 @@ type LiftSession = {
   created_at: string;
 };
 
+type PlannedRow = {
+  id: string;
+  date: string;
+  start_time: string;
+  class_name: string;
+  discipline: string;
+};
+
 export default function HomePage() {
   const [weekSessions, setWeekSessions] = useState<Session[]>([]);
   const [weekLifts, setWeekLifts] = useState<LiftSession[]>([]);
@@ -54,6 +68,15 @@ export default function HomePage() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
 
+  // This week's planned classes
+  const [plannedThisWeek, setPlannedThisWeek] = useState<PlannedRow[]>([]);
+
+  // Coach message: we generate once on demand, then show it inline
+  // and copy to clipboard.
+  const [coachMessage, setCoachMessage] = useState<string | null>(null);
+  const [coachLoading, setCoachLoading] = useState(false);
+  const [coachCopied, setCoachCopied] = useState(false);
+
   useEffect(() => {
     // Run all fetches in parallel — they're independent, so waiting
     // for one before starting the next would be pointlessly slow.
@@ -63,8 +86,26 @@ export default function HomePage() {
       loadRecentNotes(),
       loadTagCounts(),
       loadCachedSummary(),
+      loadPlannedThisWeek(),
     ]).then(() => setLoading(false));
   }, []);
+
+  async function loadPlannedThisWeek() {
+    const weekStart = startOfWeekLocal();
+    const weekEnd = addDays(weekStart, 7);
+    const { data, error } = await supabase
+      .from("planned_sessions")
+      .select("id, date, start_time, class_name, discipline")
+      .gte("date", weekStart)
+      .lt("date", weekEnd)
+      .order("date", { ascending: true })
+      .order("start_time", { ascending: true });
+    if (error) {
+      console.error("Failed to load planned sessions:", error.message);
+      return;
+    }
+    setPlannedThisWeek((data ?? []) as PlannedRow[]);
+  }
 
   async function loadWeekSessions() {
     const { data, error } = await supabase
@@ -163,6 +204,27 @@ export default function HomePage() {
       setSummaryError("Network error — are you online?");
     } finally {
       setSummaryLoading(false);
+    }
+  }
+
+  // Build the coach message, copy to clipboard, and show the text inline
+  // so the user can double-check before pasting.
+  async function generateCoachMessage() {
+    setCoachLoading(true);
+    setCoachCopied(false);
+    try {
+      const text = await buildCoachMessage();
+      setCoachMessage(text);
+      // Best-effort clipboard copy. Will work in all modern browsers when
+      // called from a user interaction handler.
+      try {
+        await navigator.clipboard.writeText(text);
+        setCoachCopied(true);
+      } catch {
+        // User can still copy manually from the inline text area.
+      }
+    } finally {
+      setCoachLoading(false);
     }
   }
 
@@ -277,6 +339,48 @@ export default function HomePage() {
         )}
       </Link>
 
+      {/* This week's planned classes strip — links to /schedule. */}
+      {plannedThisWeek.length > 0 && (
+        <Link
+          href="/schedule"
+          className="block mb-4 p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 active:scale-[0.98] transition-transform"
+        >
+          <div className="flex items-baseline justify-between mb-2">
+            <h3 className="text-sm font-medium text-zinc-500">
+              This week&apos;s plan
+            </h3>
+            <span className="text-xs text-zinc-500">
+              {plannedThisWeek.length} planned
+            </span>
+          </div>
+          <ul className="space-y-1 text-xs">
+            {plannedThisWeek.slice(0, 6).map((p) => {
+              const [yyyy, mm, dd] = p.date.split("-").map(Number);
+              const dayShort = new Date(yyyy, mm - 1, dd).toLocaleDateString(
+                undefined,
+                { weekday: "short" }
+              );
+              return (
+                <li key={p.id} className="flex items-center gap-2">
+                  <span className="text-zinc-500 w-10 flex-shrink-0">
+                    {dayShort}
+                  </span>
+                  <span className="font-medium truncate">{p.class_name}</span>
+                  <span className="text-zinc-500 ml-auto flex-shrink-0">
+                    {formatClockTime(p.start_time)}
+                  </span>
+                </li>
+              );
+            })}
+            {plannedThisWeek.length > 6 && (
+              <li className="text-zinc-400 pl-14">
+                + {plannedThisWeek.length - 6} more…
+              </li>
+            )}
+          </ul>
+        </Link>
+      )}
+
       {/* Weekly martial arts bar chart — 8-week training history */}
       <WeeklyMartialArtsChart />
 
@@ -338,6 +442,72 @@ export default function HomePage() {
             >
               Regenerate
             </button>
+          </div>
+        )}
+      </section>
+
+      {/* Coach message generator — reads last week's logs + this week's plan,
+          formats them as a pastable message. One tap to copy. */}
+      <section className="mt-3">
+        {!coachMessage && (
+          <button
+            onClick={generateCoachMessage}
+            disabled={coachLoading}
+            className="w-full py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-sm font-semibold active:scale-[0.98] transition-transform disabled:opacity-50"
+          >
+            {coachLoading ? "Preparing…" : "📋 Copy message for coach"}
+          </button>
+        )}
+        {coachMessage && (
+          <div className="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-semibold">
+                📋 Message for coach
+              </h3>
+              <button
+                onClick={() => {
+                  setCoachMessage(null);
+                  setCoachCopied(false);
+                }}
+                className="text-xs text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+              >
+                Dismiss
+              </button>
+            </div>
+            {coachCopied && (
+              <p className="text-xs text-green-600 dark:text-green-400 mb-2">
+                ✓ Copied to clipboard — paste into Instagram.
+              </p>
+            )}
+            <textarea
+              readOnly
+              value={coachMessage}
+              rows={Math.min(12, coachMessage.split("\n").length + 1)}
+              onFocus={(e) => e.currentTarget.select()}
+              className="w-full text-xs font-mono bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg p-2 resize-none"
+            />
+            <div className="mt-2 flex gap-2">
+              <button
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(coachMessage);
+                    setCoachCopied(true);
+                  } catch {
+                    /* user can select + copy manually */
+                  }
+                }}
+                className="flex-1 py-2 rounded-lg bg-green-600 text-white text-xs font-semibold"
+              >
+                {coachCopied ? "✓ Copied" : "Copy again"}
+              </button>
+              <button
+                onClick={generateCoachMessage}
+                disabled={coachLoading}
+                className="px-3 py-2 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs font-medium"
+              >
+                Refresh
+              </button>
+            </div>
           </div>
         )}
       </section>

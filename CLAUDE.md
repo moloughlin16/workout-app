@@ -63,7 +63,10 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
 - [x] **Notes + hashtag search** — `/notes` page lists all training notes. URL param `?tag=xxx` filters by tag; a client-side search box filters by free text or `#tag`. Tags rendered via `NoteText` component (`src/components/NoteText.tsx`); parsing helpers in `src/lib/tags.ts` (`extractTags`, `parseNote`).
 - [x] **AI weekly summary** — `POST /api/summary` (server route in `src/app/api/summary/route.ts`). Fetches this week's MA sessions + lift sessions + sets from Supabase, sends to Claude Sonnet, returns a coach-style summary (150-250 words). **Cached** in the `weekly_summaries` table keyed by `week_start` (Monday). Client loads cached row on Home-page mount (free, no API call). `?force=true` query param bypasses cache for the "Regenerate" button. UI lives on Home page.
 - [x] **Home dashboard** — pure read-only overview at `/`. Weekly MA card, weekly lift card, 8-week bar chart, all-time discipline pie chart (`src/components/DisciplinePieChart.tsx`), AI summary card, recent notes, tags cloud. Logging UI is on `/martial-arts` and `/lift` tabs, not Home.
-- [x] **Gym schedule data** — `src/lib/gym-schedule.ts` has the Elevate MMA weekly class schedule transcribed. Not yet wired to UI; reserved for a future class-planning feature.
+- [x] **Gym schedule data** — `src/lib/gym-schedule.ts` has the Elevate MMA weekly class schedule transcribed. Exports `GYM_SCHEDULE`, `TRACKABLE_DISCIPLINES`, `DISCIPLINE_COLOR`, `classDurationMin()`.
+- [x] **Schedule planner** (`src/app/schedule/page.tsx`): prev/next-week navigation, day-tab row (Mon–Sun with today highlighted and a green dot when classes are planned), per-class cards with "+ Plan" / "✓ Planned · Remove" toggles, and "✓ I went" one-tap logging for today/past trackable classes. "I went" inserts into `martial_arts_sessions` with `class_name` + `start_time` populated, and deletes the matching `planned_sessions` row if it existed. Yoga/Open Mat can be planned but not quick-logged because they'd violate the `martial_arts_sessions.discipline` check constraint.
+- [x] **Coach message generator** (`src/lib/coach-message.ts` + button on Home page): reads last week's `martial_arts_sessions` and this week's `planned_sessions`, groups by day, and formats a pastable "Hey coach!" message. Copies to clipboard on generation; shown inline in a read-only textarea so the user can double-check before pasting into Instagram.
+- [x] **Bottom nav: 4 tabs** — Home / Schedule / Martial Arts / Lift. Added Schedule in the second slot.
 
 ### Database schema
 
@@ -73,6 +76,8 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
 - discipline (text, check: MMA/Kickboxing/Grappling/Sparring)
 - duration_min (int, default 60)
 - notes (text, nullable)
+- class_name (text, nullable) — specific gym class name, populated when logged via Schedule
+- start_time (time, nullable) — populated when logged via Schedule
 - created_at (timestamptz, default now)
 - RLS enabled, policy "allow all for anon"
 
@@ -105,6 +110,17 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
 - RLS + permissive anon policy
 - Used for caching AI summaries to avoid repeat Claude API calls
 
+**planned_sessions**
+- id (uuid pk)
+- date (date) — specific date the class is planned for
+- start_time, end_time (time)
+- class_name (text) — e.g. "NoGi BJJ Fundamentals"
+- discipline (text, check: MMA/Kickboxing/Grappling/Sparring/Other)
+- created_at (timestamptz)
+- UNIQUE (date, start_time, class_name) — prevents duplicate plans
+- RLS + permissive anon policy
+- Populated from the Schedule page. When a user taps "I went", the row is deleted and a `martial_arts_sessions` row is inserted in its place.
+
 ### Next session plan
 
 The app is deployed, installed on the user's phone, and they're using it for real workouts. The next moves should be **incremental polish driven by what feels missing during actual use** — don't pre-build the roadmap, ask the user what bothered them this week.
@@ -129,11 +145,13 @@ In rough priority order if no preference is stated:
 
 ### Roadmap after that (do not build yet — order subject to change)
 
-**User's current wishlist (as of latest session):**
-- **Rest timer** — shared timer at top of active workout screen with preset buttons (30s/60s/90s/2min/3min) + custom. Optionally add recommended rest to `ExerciseDef`.
-- **Gym class scheduling UI** — use `src/lib/gym-schedule.ts` data to build a weekly planner. User taps classes to add to a `planned_sessions` table. Google Calendar sync was considered but **user skipped** — if we come back to it, start with `.ics` file export (no OAuth) before full OAuth sync.
+**User's current wishlist (remaining):**
 - **Extended AI summaries** — `/api/summary` currently does weekly. Add `?scope=month|all-time|topic` to query past notes. "Ask about your training" UI section with presets like "Summarize my journey" or "What have I learned about guard retention?"
 - **Apple Health + Stardust cycle tracking** — neither has a free web API. Only path: iOS Shortcuts on user's phone → webhook route in this app → Supabase table. Not built yet.
+
+**Recently shipped (for context):**
+- ✅ Rest timer, schedule planner, coach message generator, AI weekly summaries (cached), pie chart, notes search, lift label rename, Full Body 1 assisted pull-ups + hamstring curls move.
+- ❌ Google Calendar sync — user explicitly skipped. If revisited, start with `.ics` file export (no OAuth) before full OAuth sync.
 
 **Other roadmap items:**
 - Calendar/heatmap view

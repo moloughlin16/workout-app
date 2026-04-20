@@ -16,6 +16,34 @@ export type GymClass = {
   discipline: "MMA" | "Kickboxing" | "Grappling" | "Sparring" | "Other";
 };
 
+/**
+ * Disciplines our martial_arts_sessions table accepts. Classes outside
+ * this set (e.g. Ashtanga Yoga, Open Mat) can be PLANNED but can't be
+ * quick-logged with "I went" because the DB check constraint would reject them.
+ */
+export const TRACKABLE_DISCIPLINES = new Set([
+  "MMA",
+  "Kickboxing",
+  "Grappling",
+  "Sparring",
+]);
+
+/** Tailwind color classes for each discipline. Used for dots/badges. */
+export const DISCIPLINE_COLOR: Record<GymClass["discipline"], string> = {
+  MMA: "bg-red-500",
+  Kickboxing: "bg-orange-500",
+  Grappling: "bg-blue-500",
+  Sparring: "bg-purple-500",
+  Other: "bg-zinc-400",
+};
+
+/** Compute a class's duration in minutes from its start/end strings. */
+export function classDurationMin(cls: GymClass): number {
+  const [sh, sm] = cls.start.split(":").map(Number);
+  const [eh, em] = cls.end.split(":").map(Number);
+  return eh * 60 + em - (sh * 60 + sm);
+}
+
 export type DayOfWeek =
   | "Monday"
   | "Tuesday"
