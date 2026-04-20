@@ -55,6 +55,7 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
   - **Backdating** via date picker (same UX as martial arts page)
   - **`unit: "sec"` field** on `ExerciseDef` — when set, the second input shows `sec` instead of `reps` and the history label appends "sec". Currently used for Plank. Stored value is still in the `reps` integer column; only the UI label differs.
   - "Finish Workout" inserts parent `lift_sessions` row then bulk-inserts `lift_sets`
+  - **Session notes** — textarea on the active workout view ("How were you feeling?") saves to `lift_sessions.notes`. Editable in the past-session edit view. Notes preview shown in the Recent sessions list. Notes are also fed into the AI weekly summary prompt.
 - [x] **Bottom nav** (`src/components/BottomNav.tsx`): fixed nav bar with Martial Arts + Lift tabs, active-tab highlight via `usePathname()`
 - [x] **Shared date helpers** (`src/lib/date.ts`): `todayLocal()`, `formatLocalDate()`, `startOfWeekLocal()`, `relativeLabel()` — all use LOCAL time, not UTC, to avoid off-by-one bugs near midnight.
 - [x] `src/lib/supabase.ts` shared client
@@ -138,7 +139,6 @@ In rough priority order if no preference is stated:
 - Auth not set up — permissive RLS policy is fine for personal/private use, but anyone with the URL can write to the DB. If sharing the URL outside personal use, add Supabase email/magic-link auth + per-user RLS.
 - Martial arts duration hardcoded to 60.
 - No RPE input on lift tracker yet (column exists, just not wired to UI).
-- Lift session notes field not surfaced in UI.
 - Plank/time-based exercises store seconds in the `reps` integer column. Works fine but is a small abstraction leak. If it ever bites us, add a separate `seconds` column.
 - Renaming an exercise in `TEMPLATES` orphans its history (history lookup is keyed by `exercise_name`). Either don't rename, or write a one-line `UPDATE lift_sets SET exercise_name = 'new' WHERE exercise_name = 'old'` SQL when needed.
 - No PWA splash screen. iOS shows a white flash on launch. Fixable with `apple-touch-startup-image` for each screen size — tedious, low priority.

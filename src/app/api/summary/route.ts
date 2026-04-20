@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
 
       supabase
         .from("lift_sessions")
-        .select("id, date, template_name")
+        .select("id, date, template_name, notes")
         .gte("date", weekStart)
         .order("date", { ascending: true }),
 
@@ -115,7 +115,11 @@ export async function POST(request: NextRequest) {
     if (liftSessions.length > 0) {
       trainingData += `### Lifting (${liftSessions.length} sessions)\n`;
       for (const session of liftSessions) {
-        trainingData += `- ${session.date} | ${session.template_name}\n`;
+        trainingData += `- ${session.date} | ${session.template_name}`;
+        if (session.notes) {
+          trainingData += ` | Feeling: "${session.notes}"`;
+        }
+        trainingData += "\n";
         const sessionSets = liftSets.filter(
           (s) => s.session_id === session.id
         );

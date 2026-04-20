@@ -91,6 +91,7 @@ type PastSession = {
   date: string;
   template_name: string;
   created_at: string;
+  notes: string | null;
   set_count?: number;
 };
 
@@ -157,6 +158,13 @@ export default function LiftPage() {
   // Resets every time a new template is started.
   const [hiddenExercises, setHiddenExercises] = useState<Set<string>>(new Set());
 
+  // Free-text notes for the current workout — "how I was feeling", technique
+  // thoughts, bad sleep, whatever. Saved to lift_sessions.notes on finish.
+  const [sessionNotes, setSessionNotes] = useState<string>("");
+
+  // Parallel state for editing a past session's notes.
+  const [editNotes, setEditNotes] = useState<string>("");
+
   // The date we're logging FOR. Defaults to today; user can change it
   // to back-date a workout they did earlier but forgot to log.
   const [logDate, setLogDate] = useState<string>(todayLocal());
@@ -213,7 +221,7 @@ export default function LiftPage() {
     // row for each session — much faster than fetching every set row.
     const { data, error } = await supabase
       .from("lift_sessions")
-      .select("id, date, template_name, created_at, lift_sets(count)")
+      .select("id, date, template_name, notes, created_at, lift_sets(count)")
       .order("date", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(10);
@@ -231,6 +239,7 @@ export default function LiftPage() {
       id: r.id,
       date: r.date,
       template_name: r.template_name,
+      notes: r.notes,
       created_at: r.created_at,
       set_count: r.lift_sets?.[0]?.count ?? 0,
     }));
@@ -248,6 +257,8 @@ export default function LiftPage() {
     setNewPRs([]);
     // Start with no exercises hidden — fresh workout, full template visible.
     setHiddenExercises(new Set());
+    // Fresh notes field.
+    setSessionNotes("");
 
     // Initialize the form: each exercise starts with `targetSets` empty rows.
     const initial: Record<string, ExerciseForm> = {};
@@ -497,9 +508,16 @@ export default function LiftPage() {
 
     // Step 1: create the parent session row and get its ID back.
     // Pass logDate explicitly to support back-dating workouts.
+    // `sessionNotes` — null when empty so the DB has a clean NULL instead
+    // of an empty string (plays nicer with queries and the coach summary).
+    const trimmedNotes = sessionNotes.trim();
     const { data: sessionData, error: sessionError } = await supabase
       .from("lift_sessions")
-      .insert({ template_name: activeTemplate.name, date: logDate })
+      .insert({
+        template_name: activeTemplate.name,
+        date: logDate,
+        notes: trimmedNotes.length > 0 ? trimmedNotes : null,
+      })
       .select()
       .single();
 
@@ -534,6 +552,7 @@ export default function LiftPage() {
     // Go back to the template picker.
     setActiveTemplate(null);
     setForms({});
+    setSessionNotes("");
     // Refresh the recent-sessions list so the new workout shows up.
     loadPastSessions();
     loadExerciseHistory();
@@ -543,6 +562,7 @@ export default function LiftPage() {
     if (confirm("Cancel workout? Entered sets will be lost.")) {
       setActiveTemplate(null);
       setForms({});
+      setSessionNotes("");
       setErrorMsg(null);
     }
   }
@@ -591,12 +611,14 @@ export default function LiftPage() {
     );
 
     setEditGroups(groups);
+    setEditNotes(session.notes ?? "");
     setEditingSession(session);
   }
 
   function cancelEditing() {
     setEditingSession(null);
     setEditGroups([]);
+    setEditNotes("");
     setErrorMsg(null);
   }
 
@@ -674,6 +696,19 @@ export default function LiftPage() {
       });
     }
 
+    // Step 0: push the edited notes back to lift_sessions. Treat empty
+    // input as NULL so the coach summary / AI prompt skip it cleanly.
+    const trimmedNotes = editNotes.trim();
+    const { error: notesError } = await supabase
+      .from("lift_sessions")
+      .update({ notes: trimmedNotes.length > 0 ? trimmedNotes : null })
+      .eq("id", editingSession.id);
+    if (notesError) {
+      setErrorMsg(`Failed to update notes: ${notesError.message}`);
+      setSaving(false);
+      return;
+    }
+
     // Step 1: delete existing sets for this session.
     const { error: deleteError } = await supabase
       .from("lift_sets")
@@ -704,6 +739,7 @@ export default function LiftPage() {
     setSaving(false);
     setEditingSession(null);
     setEditGroups([]);
+    setEditNotes("");
     // Refresh the picker list so counts and most-recent order are correct.
     loadPastSessions();
     loadExerciseHistory();
@@ -769,6 +805,24 @@ export default function LiftPage() {
             Cancel
           </button>
         </header>
+
+        {/* Session notes editor — always visible, even when no sets exist. */}
+        <section className="mb-4 p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+          <label
+            htmlFor="edit-session-notes"
+            className="text-xs font-medium text-zinc-500"
+          >
+            How were you feeling? (notes)
+          </label>
+          <textarea
+            id="edit-session-notes"
+            value={editNotes}
+            onChange={(e) => setEditNotes(e.target.value)}
+            rows={3}
+            placeholder="Energy, sleep, soreness, focus — whatever's worth remembering…"
+            className="mt-2 w-full text-sm bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg p-2 resize-y"
+          />
+        </section>
 
         {editGroups.length === 0 ? (
           <p className="text-sm text-zinc-500">
@@ -971,34 +1025,41 @@ export default function LiftPage() {
             <p className="text-xs text-zinc-500">No sessions logged yet.</p>
           )}
           <ul className="space-y-2">
-            {pastSessions.map((s) => (
-              <li
-                key={s.id}
-                className="flex items-center gap-3 p-3 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
-              >
-                <button
-                  onClick={() => startEditing(s)}
-                  className="flex-1 min-w-0 text-left"
-                  aria-label={`Edit ${s.template_name} from ${relativeLabel(
-                    s.date
-                  )}`}
+            {pastSessions.map((s) => {
+              const hasNote = (s.notes ?? "").trim().length > 0;
+              return (
+                <li
+                  key={s.id}
+                  className="flex items-start gap-3 p-3 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
                 >
-                  <div className="text-sm font-semibold truncate">
-                    🏋️ {s.template_name}
-                  </div>
-                  <div className="text-xs text-zinc-500">
-                    {relativeLabel(s.date)} · {s.set_count ?? 0} sets
-                  </div>
-                </button>
-                <button
-                  onClick={() => deleteSession(s)}
-                  className="text-zinc-400 hover:text-red-500 text-xl px-2"
-                  aria-label="Delete session"
-                >
-                  ×
-                </button>
-              </li>
-            ))}
+                  <button
+                    onClick={() => startEditing(s)}
+                    className="flex-1 min-w-0 text-left"
+                    aria-label={`Edit ${s.template_name} from ${relativeLabel(s.date)}`}
+                  >
+                    <div className="text-sm font-semibold truncate">
+                      🏋️ {s.template_name}
+                    </div>
+                    <div className="text-xs text-zinc-500">
+                      {relativeLabel(s.date)} · {s.set_count ?? 0} sets
+                      {hasNote && " · 📝"}
+                    </div>
+                    {hasNote && (
+                      <div className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 line-clamp-2 whitespace-pre-wrap">
+                        {s.notes}
+                      </div>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => deleteSession(s)}
+                    className="text-zinc-400 hover:text-red-500 text-xl px-2"
+                    aria-label="Delete session"
+                  >
+                    ×
+                  </button>
+                </li>
+              );
+            })}
           </ul>
         </section>
 
@@ -1175,6 +1236,24 @@ export default function LiftPage() {
           {hiddenExercises.size === 1 ? "" : "s"}
         </button>
       )}
+
+      {/* Session notes — jot down how you were feeling while it's fresh. */}
+      <section className="mt-6 p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+        <label
+          htmlFor="session-notes"
+          className="text-xs font-medium text-zinc-500"
+        >
+          How were you feeling? (optional)
+        </label>
+        <textarea
+          id="session-notes"
+          value={sessionNotes}
+          onChange={(e) => setSessionNotes(e.target.value)}
+          rows={3}
+          placeholder="Energy, sleep, soreness, focus — whatever's worth remembering…"
+          className="mt-2 w-full text-sm bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg p-2 resize-y"
+        />
+      </section>
 
       {errorMsg && (
         <div className="mt-4 p-4 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-900 dark:text-red-200 text-center text-sm">
