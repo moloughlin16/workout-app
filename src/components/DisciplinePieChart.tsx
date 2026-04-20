@@ -142,9 +142,7 @@ export default function DisciplinePieChart() {
                 />
                 <span className="flex-shrink-0">{s.emoji}</span>
                 <span className="font-medium">{s.name}</span>
-                <span className="ml-auto text-zinc-500">
-                  {s.hours}h · {s.percent}%
-                </span>
+                <span className="ml-auto text-zinc-500">{s.hours}h</span>
               </li>
             ))}
           </ul>

@@ -2,7 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { todayLocal, startOfWeekLocal, relativeLabel } from "@/lib/date";
+import {
+  addDays,
+  relativeLabel,
+  startOfWeekLocal,
+  todayLocal,
+  weekRangeLabel,
+  weekStartFor,
+} from "@/lib/date";
 import NoteText from "@/components/NoteText";
 
 // The four martial arts disciplines we want to track.
@@ -35,6 +42,13 @@ export default function MartialArtsPage() {
   const [weekSessions, setWeekSessions] = useState<Session[]>([]);
   const [loadingSessions, setLoadingSessions] = useState(true);
 
+  // Monday of the week we're CURRENTLY VIEWING on the page. Navigate with
+  // the prev/next arrows to browse and delete past sessions. Independent
+  // of `logDate` — you can view last week while still logging for today.
+  const [viewedWeekStart, setViewedWeekStart] = useState<string>(
+    startOfWeekLocal()
+  );
+
   // The date we're logging FOR. Defaults to today.
   // Changing this lets the user log a class they missed logging earlier.
   const [logDate, setLogDate] = useState<string>(todayLocal());
@@ -54,16 +68,21 @@ export default function MartialArtsPage() {
   );
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
 
+  // Reload the session list whenever the user navigates to a different week.
   useEffect(() => {
     loadWeekSessions();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewedWeekStart]);
 
   async function loadWeekSessions() {
     setLoadingSessions(true);
+    // Fetch only the week currently being viewed: [weekStart, weekStart + 7).
+    const endExclusive = addDays(viewedWeekStart, 7);
     const { data, error } = await supabase
       .from("martial_arts_sessions")
       .select("*")
-      .gte("date", startOfWeekLocal())
+      .gte("date", viewedWeekStart)
+      .lt("date", endExclusive)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -86,7 +105,15 @@ export default function MartialArtsPage() {
       setErrorMsg(`Failed to save: ${error.message}`);
     } else {
       setLastLogged(discipline);
-      await loadWeekSessions();
+      // Jump to the week containing the date we just logged for, so the
+      // user always sees the class they just added. If they're already on
+      // that week, nothing changes (and we still refresh via useEffect).
+      const targetWeek = weekStartFor(logDate);
+      if (targetWeek === viewedWeekStart) {
+        await loadWeekSessions(); // Same week — manual refresh.
+      } else {
+        setViewedWeekStart(targetWeek); // Different week — useEffect reloads.
+      }
     }
     setSaving(false);
   }
@@ -228,10 +255,48 @@ export default function MartialArtsPage() {
         </div>
       </div>
 
-      {/* Weekly progress panel */}
+      {/* Week navigation — lets the user browse past weeks to view/delete
+          old sessions. The weekly progress panel + classes list both follow. */}
+      <div className="mb-3 flex items-center justify-between p-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+        <button
+          onClick={() => setViewedWeekStart((w) => addDays(w, -7))}
+          className="px-3 py-1.5 rounded-lg text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          aria-label="Previous week"
+        >
+          ←
+        </button>
+        <div className="text-sm font-semibold">
+          {viewedWeekStart === startOfWeekLocal()
+            ? "This week"
+            : weekRangeLabel(viewedWeekStart)}
+        </div>
+        <button
+          onClick={() => setViewedWeekStart((w) => addDays(w, 7))}
+          disabled={viewedWeekStart >= startOfWeekLocal()}
+          className="px-3 py-1.5 rounded-lg text-sm text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed"
+          aria-label="Next week"
+        >
+          →
+        </button>
+      </div>
+
+      {viewedWeekStart !== startOfWeekLocal() && (
+        <button
+          onClick={() => setViewedWeekStart(startOfWeekLocal())}
+          className="w-full mb-3 text-xs text-green-600 dark:text-green-400 font-medium"
+        >
+          Back to this week
+        </button>
+      )}
+
+      {/* Weekly progress panel — shows whatever week is being viewed. */}
       <section className="mb-6 p-5 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
         <div className="flex items-baseline justify-between">
-          <h2 className="text-sm font-medium text-zinc-500">This week</h2>
+          <h2 className="text-sm font-medium text-zinc-500">
+            {viewedWeekStart === startOfWeekLocal()
+              ? "This week"
+              : weekRangeLabel(viewedWeekStart)}
+          </h2>
           <span className="text-sm text-zinc-500">
             Goal: {WEEKLY_HOURS_GOAL}h
           </span>
@@ -294,11 +359,21 @@ export default function MartialArtsPage() {
         </div>
       )}
 
-      {/* This week's classes — for quick recovery from misclicks */}
+      {/* Classes for the viewed week — delete buttons double as a way to
+          clean up backfilled/old entries. An explicit empty-state message
+          appears when you've navigated to a past week with nothing logged. */}
+      {weekSessions.length === 0 && viewedWeekStart !== startOfWeekLocal() && !loadingSessions && (
+        <p className="mt-8 text-sm text-zinc-500 p-4 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-center">
+          No classes logged in {weekRangeLabel(viewedWeekStart)}.
+        </p>
+      )}
+
       {weekSessions.length > 0 && (
         <section className="mt-8">
           <h3 className="text-sm font-medium text-zinc-500 mb-2">
-            This week&apos;s classes
+            {viewedWeekStart === startOfWeekLocal()
+              ? "This week's classes"
+              : `Classes for ${weekRangeLabel(viewedWeekStart)}`}
           </h3>
           <ul className="space-y-2">
             {weekSessions.map((s) => {
