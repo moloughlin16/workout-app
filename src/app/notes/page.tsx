@@ -106,7 +106,7 @@ function NotesBrowser() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search notes or #tags…"
-          className="w-full px-4 py-2.5 pr-10 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-green-500"
+          className="w-full px-4 py-2.5 pr-10 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-sm placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
         />
         {search && (
           <button
@@ -122,7 +122,7 @@ function NotesBrowser() {
 
       {/* Active filter banner */}
       {tagFilter && (
-        <div className="mb-4 flex items-center justify-between p-3 rounded-xl bg-green-100 dark:bg-green-900/20 border border-green-300 dark:border-green-900/50">
+        <div className="mb-4 flex items-center justify-between p-3 rounded-xl bg-indigo-100 dark:bg-indigo-900/20 border border-indigo-300 dark:border-indigo-900/50">
           <div className="text-sm">
             Filtered by{" "}
             <span className="font-semibold">#{tagFilter}</span>{" "}
@@ -157,7 +157,7 @@ function NotesBrowser() {
         {filtered.map((s) => (
           <li
             key={s.id}
-            className="p-4 rounded-xl bg-white dark:bg-zinc-900 border-l-4 border-l-green-500 border-y border-r border-zinc-200 dark:border-zinc-800"
+            className="p-4 rounded-xl bg-white dark:bg-zinc-900 border-l-4 border-l-indigo-500 border-y border-r border-zinc-200 dark:border-zinc-800"
           >
             <div className="flex items-center gap-2 text-xs text-zinc-500 mb-1">
               <span>{DISCIPLINE_EMOJI[s.discipline] ?? "•"}</span>

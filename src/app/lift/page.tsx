@@ -874,7 +874,7 @@ export default function LiftPage() {
                   ))}
                   <button
                     onClick={() => addEditSet(gi)}
-                    className="text-xs text-green-600 dark:text-green-400 font-medium"
+                    className="text-xs text-indigo-600 dark:text-indigo-400 font-medium"
                   >
                     + Add set
                   </button>
@@ -893,7 +893,7 @@ export default function LiftPage() {
         <button
           onClick={saveEdit}
           disabled={saving}
-          className="mt-6 w-full py-4 rounded-2xl bg-green-600 text-white font-semibold text-lg active:scale-[0.98] transition-transform disabled:opacity-50"
+          className="mt-6 w-full py-4 rounded-2xl bg-indigo-600 text-white font-semibold text-lg active:scale-[0.98] transition-transform disabled:opacity-50"
         >
           {saving ? "Saving…" : "Save changes"}
         </button>
@@ -945,7 +945,7 @@ export default function LiftPage() {
             {isBackdating && (
               <button
                 onClick={() => setLogDate(todayLocal())}
-                className="text-xs text-green-600 dark:text-green-400 font-medium"
+                className="text-xs text-indigo-600 dark:text-indigo-400 font-medium"
               >
                 Today
               </button>
@@ -954,7 +954,7 @@ export default function LiftPage() {
         </div>
 
         {successMsg && (
-          <div className="mb-4 p-4 rounded-xl bg-green-100 dark:bg-green-900/30 text-green-900 dark:text-green-200 text-center">
+          <div className="mb-4 p-4 rounded-xl bg-indigo-100 dark:bg-indigo-900/30 text-indigo-900 dark:text-indigo-200 text-center">
             {successMsg}
           </div>
         )}
@@ -1173,7 +1173,7 @@ export default function LiftPage() {
                 <p className="text-xs text-zinc-500 mt-1">{ex.note}</p>
               )}
               {last ? (
-                <p className="text-xs text-green-700 dark:text-green-400 mt-1">
+                <p className="text-xs text-indigo-700 dark:text-indigo-400 mt-1">
                   Last: {last.weight_lb ?? "BW"} lb × {last.reps ?? "–"}{" "}
                   {ex.unit === "sec" ? "sec" : ""}
                 </p>
@@ -1216,7 +1216,7 @@ export default function LiftPage() {
                 ))}
                 <button
                   onClick={() => addSet(ex.name)}
-                  className="text-xs text-green-600 dark:text-green-400 font-medium"
+                  className="text-xs text-indigo-600 dark:text-indigo-400 font-medium"
                 >
                   + Add set
                 </button>
@@ -1230,7 +1230,7 @@ export default function LiftPage() {
       {hiddenExercises.size > 0 && (
         <button
           onClick={unhideAll}
-          className="mt-4 w-full py-2 text-xs text-zinc-500 hover:text-green-600 dark:hover:text-green-400 underline"
+          className="mt-4 w-full py-2 text-xs text-zinc-500 hover:text-indigo-600 dark:hover:text-indigo-400 underline"
         >
           Show {hiddenExercises.size} skipped exercise
           {hiddenExercises.size === 1 ? "" : "s"}
@@ -1264,7 +1264,7 @@ export default function LiftPage() {
       <button
         onClick={finishWorkout}
         disabled={saving}
-        className="mt-6 w-full py-4 rounded-2xl bg-green-600 text-white font-semibold text-lg active:scale-[0.98] transition-transform disabled:opacity-50"
+        className="mt-6 w-full py-4 rounded-2xl bg-indigo-600 text-white font-semibold text-lg active:scale-[0.98] transition-transform disabled:opacity-50"
       >
         {saving ? "Saving…" : "Finish Workout"}
       </button>

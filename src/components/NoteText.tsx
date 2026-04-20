@@ -34,7 +34,7 @@ export default function NoteText({ text, className, staticTags }: Props) {
           return (
             <span
               key={i}
-              className="inline-block px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 text-[0.85em] font-medium mx-0.5"
+              className="inline-block px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-300 text-[0.85em] font-medium mx-0.5"
             >
               {p.display}
             </span>
@@ -45,7 +45,7 @@ export default function NoteText({ text, className, staticTags }: Props) {
             key={i}
             href={`/notes?tag=${encodeURIComponent(p.content)}`}
             onClick={(e) => e.stopPropagation()}
-            className="inline-block px-1.5 py-0.5 rounded bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 text-[0.85em] font-medium mx-0.5 hover:bg-green-200 dark:hover:bg-green-900/50"
+            className="inline-block px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-300 text-[0.85em] font-medium mx-0.5 hover:bg-indigo-200 dark:hover:bg-indigo-900/50"
           >
             {p.display}
           </Link>

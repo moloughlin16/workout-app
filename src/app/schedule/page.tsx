@@ -257,7 +257,7 @@ export default function SchedulePage() {
       {weekStart !== startOfWeekLocal() && (
         <button
           onClick={() => setWeekStart(startOfWeekLocal())}
-          className="w-full mb-3 text-xs text-green-600 dark:text-green-400 font-medium"
+          className="w-full mb-3 text-xs text-indigo-600 dark:text-indigo-400 font-medium"
         >
           Back to this week
         </button>
@@ -276,9 +276,9 @@ export default function SchedulePage() {
               onClick={() => setSelectedDayIdx(idx)}
               className={`flex flex-col items-center py-2 rounded-lg text-xs transition-colors ${
                 isSelected
-                  ? "bg-green-600 text-white font-semibold"
+                  ? "bg-indigo-600 text-white font-semibold"
                   : isTodayDay
-                    ? "bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 font-semibold"
+                    ? "bg-indigo-100 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-300 font-semibold"
                     : "bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-800"
               }`}
             >
@@ -293,7 +293,7 @@ export default function SchedulePage() {
               {count > 0 && (
                 <span
                   className={`mt-0.5 inline-block w-1.5 h-1.5 rounded-full ${
-                    isSelected ? "bg-white" : "bg-green-500"
+                    isSelected ? "bg-white" : "bg-indigo-500"
                   }`}
                   aria-label={`${count} planned`}
                 />
@@ -305,7 +305,7 @@ export default function SchedulePage() {
 
       {/* Feedback banners */}
       {successMsg && (
-        <div className="mb-3 p-3 rounded-xl bg-green-100 dark:bg-green-900/30 text-green-900 dark:text-green-200 text-sm text-center">
+        <div className="mb-3 p-3 rounded-xl bg-indigo-100 dark:bg-indigo-900/30 text-indigo-900 dark:text-indigo-200 text-sm text-center">
           {successMsg}
         </div>
       )}
@@ -359,7 +359,7 @@ export default function SchedulePage() {
                 key={keyBase}
                 className={`p-3 rounded-xl border ${
                   isPlanned
-                    ? "bg-green-50 dark:bg-green-950/30 border-green-300 dark:border-green-800"
+                    ? "bg-indigo-50 dark:bg-indigo-950/30 border-indigo-300 dark:border-indigo-800"
                     : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800"
                 }`}
               >
@@ -383,7 +383,7 @@ export default function SchedulePage() {
                     <button
                       onClick={() => logAttendance(cls, selectedDate)}
                       disabled={busyKey === logKey}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-green-600 text-white disabled:opacity-50 hover:bg-green-700"
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 text-white disabled:opacity-50 hover:bg-indigo-700"
                     >
                       {busyKey === logKey ? "…" : "✓ I went"}
                     </button>
@@ -394,7 +394,7 @@ export default function SchedulePage() {
                     <button
                       onClick={() => unplan(isPlanned.id)}
                       disabled={busyKey === isPlanned.id}
-                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-green-700 dark:text-green-300 border border-green-300 dark:border-green-800 hover:bg-green-100 dark:hover:bg-green-900/50 disabled:opacity-50"
+                      className="px-3 py-1.5 rounded-lg text-xs font-medium text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 disabled:opacity-50"
                     >
                       ✓ Planned · Remove
                     </button>

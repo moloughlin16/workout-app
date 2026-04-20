@@ -22,7 +22,7 @@ export const metadata: Metadata = {
   // iOS Safari uses these to make "Add to Home Screen" feel like a real app:
   // - apple-mobile-web-app-capable: launch full-screen, no Safari chrome
   // - title: the label shown under the home screen icon
-  // - status-bar-style: dark content over our zinc-950 background
+  // - status-bar-style: translucent so our dark page background shows through
   appleWebApp: {
     capable: true,
     title: "Workout",
@@ -40,8 +40,10 @@ export const metadata: Metadata = {
 
 // Viewport / theme color live in their own export in Next.js 14+.
 // `viewportFit: "cover"` lets the app draw under the iPhone notch / home bar.
+// themeColor = zinc-950 to match the forced-dark background (affects the iOS
+// status bar + Android browser chrome color).
 export const viewport: Viewport = {
-  themeColor: "#16a34a",
+  themeColor: "#09090b",
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -53,12 +55,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
+    // `className="dark"` locks the whole app into Tailwind's dark palette
+    // regardless of system setting. `bg-zinc-950` on <html> prevents a
+    // white flash when the PWA launches before our page-level bg kicks in.
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`dark ${geistSans.variable} ${geistMono.variable} h-full antialiased bg-zinc-950`}
     >
       {/* pb-20 = bottom padding so page content isn't hidden behind the nav */}
-      <body className="min-h-full flex flex-col pb-20">
+      <body className="min-h-full flex flex-col pb-20 bg-zinc-950 text-zinc-100">
         {children}
         <BottomNav />
       </body>

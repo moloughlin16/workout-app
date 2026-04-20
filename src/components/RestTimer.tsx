@@ -167,24 +167,24 @@ export default function RestTimer() {
   if (isFinished) {
     return (
       <div className="sticky top-0 z-10 -mx-6 px-6 py-2.5 bg-zinc-50/90 dark:bg-zinc-950/90 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800">
-        <div className="p-3 rounded-xl bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-800 flex items-center justify-between gap-3">
+        <div className="p-3 rounded-xl bg-indigo-100 dark:bg-indigo-900/30 border border-indigo-300 dark:border-indigo-800 flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <span className="text-xl">✅</span>
-            <span className="text-sm font-semibold text-green-900 dark:text-green-200">
+            <span className="text-sm font-semibold text-indigo-900 dark:text-indigo-200">
               Rest done — go!
             </span>
           </div>
           <div className="flex gap-1">
             <button
               onClick={() => start(initial)}
-              className="px-2.5 py-1 text-xs font-medium rounded bg-white dark:bg-zinc-900 border border-green-300 dark:border-green-800"
+              className="px-2.5 py-1 text-xs font-medium rounded bg-white dark:bg-zinc-900 border border-indigo-300 dark:border-indigo-800"
               title="Restart same duration"
             >
               Repeat
             </button>
             <button
               onClick={dismiss}
-              className="px-2 py-1 text-xs rounded bg-white dark:bg-zinc-900 border border-green-300 dark:border-green-800"
+              className="px-2 py-1 text-xs rounded bg-white dark:bg-zinc-900 border border-indigo-300 dark:border-indigo-800"
               aria-label="Dismiss"
             >
               ✕

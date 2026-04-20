@@ -42,7 +42,7 @@ export default function BottomNav() {
               href={item.href}
               className={`flex flex-col items-center justify-center gap-1 py-3 text-xs font-medium transition-colors ${
                 active
-                  ? "text-green-600 dark:text-green-400"
+                  ? "text-indigo-600 dark:text-indigo-400"
                   : "text-zinc-500 dark:text-zinc-400"
               }`}
             >

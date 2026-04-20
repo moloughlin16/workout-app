@@ -124,18 +124,18 @@ export default function WeeklyMartialArtsChart() {
               {/* Goal reference line */}
               <ReferenceLine
                 y={WEEKLY_GOAL_HOURS}
-                stroke="#22c55e"
+                stroke="#06b6d4"
                 strokeDasharray="4 4"
                 label={{
                   value: `${WEEKLY_GOAL_HOURS}h goal`,
                   position: "insideTopRight",
-                  fill: "#22c55e",
+                  fill: "#06b6d4",
                   fontSize: 10,
                 }}
               />
               <Bar
                 dataKey="hours"
-                fill="#22c55e"
+                fill="#06b6d4"
                 radius={[6, 6, 0, 0]}
               />
             </BarChart>

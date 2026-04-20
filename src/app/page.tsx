@@ -284,7 +284,7 @@ export default function HomePage() {
         </div>
         <div className="mt-3 h-2 w-full rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
           <div
-            className="h-full bg-green-500 transition-all duration-500"
+            className="h-full bg-cyan-500 transition-all duration-500"
             style={{ width: `${maGoalPercent}%` }}
           />
         </div>
@@ -395,7 +395,7 @@ export default function HomePage() {
           <button
             onClick={() => generateSummary()}
             disabled={loading}
-            className="w-full py-3.5 rounded-2xl bg-purple-600 text-white font-semibold text-sm active:scale-[0.98] transition-transform disabled:opacity-50"
+            className="w-full py-3.5 rounded-2xl bg-violet-600 text-white font-semibold text-sm active:scale-[0.98] transition-transform disabled:opacity-50"
           >
             ✨ Summarize my week
           </button>
@@ -418,9 +418,9 @@ export default function HomePage() {
           </div>
         )}
         {summary && (
-          <div className="p-5 rounded-2xl bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800">
+          <div className="p-5 rounded-2xl bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-purple-700 dark:text-purple-300">
+              <h3 className="text-sm font-semibold text-violet-700 dark:text-violet-300">
                 ✨ AI Weekly Summary
               </h3>
               <button
@@ -428,7 +428,7 @@ export default function HomePage() {
                   setSummary(null);
                   setSummaryError(null);
                 }}
-                className="text-xs text-purple-500 hover:text-purple-700 dark:hover:text-purple-300"
+                className="text-xs text-violet-500 hover:text-violet-700 dark:hover:text-violet-300"
               >
                 Dismiss
               </button>
@@ -438,7 +438,7 @@ export default function HomePage() {
             </p>
             <button
               onClick={() => generateSummary(true)}
-              className="mt-3 text-xs text-purple-600 dark:text-purple-400 font-medium hover:underline"
+              className="mt-3 text-xs text-violet-600 dark:text-violet-400 font-medium hover:underline"
             >
               Regenerate
             </button>
@@ -475,7 +475,7 @@ export default function HomePage() {
               </button>
             </div>
             {coachCopied && (
-              <p className="text-xs text-green-600 dark:text-green-400 mb-2">
+              <p className="text-xs text-indigo-600 dark:text-indigo-400 mb-2">
                 ✓ Copied to clipboard — paste into Instagram.
               </p>
             )}
@@ -496,7 +496,7 @@ export default function HomePage() {
                     /* user can select + copy manually */
                   }
                 }}
-                className="flex-1 py-2 rounded-lg bg-green-600 text-white text-xs font-semibold"
+                className="flex-1 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold"
               >
                 {coachCopied ? "✓ Copied" : "Copy again"}
               </button>
@@ -520,7 +520,7 @@ export default function HomePage() {
             <h3 className="text-sm font-medium text-zinc-500">Recent notes</h3>
             <Link
               href="/notes"
-              className="text-xs text-green-600 dark:text-green-400 font-medium"
+              className="text-xs text-indigo-600 dark:text-indigo-400 font-medium"
             >
               View all
             </Link>
@@ -529,7 +529,7 @@ export default function HomePage() {
             {recentNotes.map((s) => (
               <li
                 key={s.id}
-                className="p-4 rounded-xl bg-white dark:bg-zinc-900 border-l-4 border-l-green-500 border-y border-r border-zinc-200 dark:border-zinc-800"
+                className="p-4 rounded-xl bg-white dark:bg-zinc-900 border-l-4 border-l-indigo-500 border-y border-r border-zinc-200 dark:border-zinc-800"
               >
                 <div className="flex items-center gap-2 text-xs text-zinc-500 mb-1">
                   <span>{emojiByDiscipline[s.discipline] ?? "•"}</span>
@@ -555,10 +555,10 @@ export default function HomePage() {
               <Link
                 key={tag}
                 href={`/notes?tag=${encodeURIComponent(tag)}`}
-                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-300 text-xs font-medium hover:bg-green-200 dark:hover:bg-green-900/50"
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-300 text-xs font-medium hover:bg-indigo-200 dark:hover:bg-indigo-900/50"
               >
                 <span>#{tag}</span>
-                <span className="text-green-600 dark:text-green-500">
+                <span className="text-indigo-600 dark:text-indigo-500">
                   {count}
                 </span>
               </Link>

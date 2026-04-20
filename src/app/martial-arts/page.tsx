@@ -246,7 +246,7 @@ export default function MartialArtsPage() {
           {isBackdating && (
             <button
               onClick={() => setLogDate(todayLocal())}
-              className="text-xs text-green-600 dark:text-green-400 font-medium"
+              className="text-xs text-indigo-600 dark:text-indigo-400 font-medium"
               aria-label="Reset to today"
             >
               Today
@@ -283,7 +283,7 @@ export default function MartialArtsPage() {
       {viewedWeekStart !== startOfWeekLocal() && (
         <button
           onClick={() => setViewedWeekStart(startOfWeekLocal())}
-          className="w-full mb-3 text-xs text-green-600 dark:text-green-400 font-medium"
+          className="w-full mb-3 text-xs text-indigo-600 dark:text-indigo-400 font-medium"
         >
           Back to this week
         </button>
@@ -309,7 +309,7 @@ export default function MartialArtsPage() {
         </div>
         <div className="mt-3 h-2 w-full rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
           <div
-            className="h-full bg-green-500 transition-all duration-500"
+            className="h-full bg-cyan-500 transition-all duration-500"
             style={{ width: `${goalPercent}%` }}
           />
         </div>
@@ -349,7 +349,7 @@ export default function MartialArtsPage() {
         </div>
       )}
       {lastLogged && !saving && !errorMsg && (
-        <div className="mt-6 p-4 rounded-xl bg-green-100 dark:bg-green-900/30 text-green-900 dark:text-green-200 text-center">
+        <div className="mt-6 p-4 rounded-xl bg-indigo-100 dark:bg-indigo-900/30 text-indigo-900 dark:text-indigo-200 text-center">
           Logged {lastLogged} ✓
         </div>
       )}
@@ -443,7 +443,7 @@ export default function MartialArtsPage() {
                               [s.id]: e.target.value,
                             }))
                           }
-                          className="w-16 text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-green-500"
+                          className="w-16 text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                         <span className="text-xs text-zinc-500">min</span>
                       </div>
@@ -457,7 +457,7 @@ export default function MartialArtsPage() {
                         }
                         placeholder="What did you learn? What did you struggle with? Use #tags to group topics (e.g. #guard-retention)."
                         rows={4}
-                        className="w-full text-sm p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-green-500"
+                        className="w-full text-sm p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                       <div className="flex justify-end gap-2 mt-2">
                         <button
@@ -469,7 +469,7 @@ export default function MartialArtsPage() {
                         <button
                           onClick={() => handleSaveSession(s.id)}
                           disabled={savingNoteId === s.id}
-                          className="text-xs px-3 py-1.5 rounded-lg bg-green-600 text-white font-medium disabled:opacity-50"
+                          className="text-xs px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-medium disabled:opacity-50"
                         >
                           {savingNoteId === s.id ? "Saving…" : "Save"}
                         </button>
