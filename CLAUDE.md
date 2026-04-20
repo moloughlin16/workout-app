@@ -55,7 +55,7 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
   - **Backdating** via date picker (same UX as martial arts page)
   - **`unit: "sec"` field** on `ExerciseDef` — when set, the second input shows `sec` instead of `reps` and the history label appends "sec". Currently used for Plank. Stored value is still in the `reps` integer column; only the UI label differs.
   - "Finish Workout" inserts parent `lift_sessions` row then bulk-inserts `lift_sets`
-  - **Session notes** — textarea on the active workout view ("How were you feeling?") saves to `lift_sessions.notes`. Editable in the past-session edit view. Notes preview shown in the Recent sessions list. Notes are also fed into the AI weekly summary prompt.
+  - **Session notes + mood** — textarea saves to `lift_sessions.notes`; a 5-emoji `MoodPicker` (😩 😕 😐 🙂 💪 → int 1-5) saves to `lift_sessions.mood`. Both live in a card above the "Finish Workout" button on the active workout view, and again at the top of the edit view. Notes preview + mood emoji are shown in the Recent sessions list. Both are fed into the AI weekly summary prompt (mood is translated back to "Drained/Low/Okay/Good/Strong" for Claude).
 - [x] **Bottom nav** (`src/components/BottomNav.tsx`): fixed nav bar with Martial Arts + Lift tabs, active-tab highlight via `usePathname()`
 - [x] **Shared date helpers** (`src/lib/date.ts`): `todayLocal()`, `formatLocalDate()`, `startOfWeekLocal()`, `relativeLabel()` — all use LOCAL time, not UTC, to avoid off-by-one bugs near midnight.
 - [x] `src/lib/supabase.ts` shared client
@@ -81,6 +81,8 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
 - start_time (time, nullable) — populated when logged via Schedule
 - created_at (timestamptz, default now)
 - RLS enabled, policy "allow all for anon"
+
+*Note: `lift_sessions` also has a `mood` column (int 1-5 with a CHECK constraint) populated by the `MoodPicker` component.*
 
 **lift_sessions**
 - id (uuid pk)

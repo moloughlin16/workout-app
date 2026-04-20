@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { todayLocal, relativeLabel } from "@/lib/date";
 import ExerciseProgressChart from "@/components/ExerciseProgressChart";
 import RestTimer from "@/components/RestTimer";
+import MoodPicker, { moodEmoji } from "@/components/MoodPicker";
 
 // ============================================================
 // TEMPLATE DEFINITIONS
@@ -92,6 +93,7 @@ type PastSession = {
   template_name: string;
   created_at: string;
   notes: string | null;
+  mood: number | null;
   set_count?: number;
 };
 
@@ -161,9 +163,15 @@ export default function LiftPage() {
   // Free-text notes for the current workout — "how I was feeling", technique
   // thoughts, bad sleep, whatever. Saved to lift_sessions.notes on finish.
   const [sessionNotes, setSessionNotes] = useState<string>("");
+  // Mood rating 1-5 mapped to emojis via MoodPicker. null = not picked.
+  // Saved to lift_sessions.mood on finish; readable in past sessions list.
+  const [sessionMood, setSessionMood] = useState<1 | 2 | 3 | 4 | 5 | null>(
+    null
+  );
 
-  // Parallel state for editing a past session's notes.
+  // Parallel state for editing a past session.
   const [editNotes, setEditNotes] = useState<string>("");
+  const [editMood, setEditMood] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
 
   // The date we're logging FOR. Defaults to today; user can change it
   // to back-date a workout they did earlier but forgot to log.
@@ -221,7 +229,7 @@ export default function LiftPage() {
     // row for each session — much faster than fetching every set row.
     const { data, error } = await supabase
       .from("lift_sessions")
-      .select("id, date, template_name, notes, created_at, lift_sets(count)")
+      .select("id, date, template_name, notes, mood, created_at, lift_sets(count)")
       .order("date", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(10);
@@ -240,6 +248,7 @@ export default function LiftPage() {
       date: r.date,
       template_name: r.template_name,
       notes: r.notes,
+      mood: r.mood,
       created_at: r.created_at,
       set_count: r.lift_sets?.[0]?.count ?? 0,
     }));
@@ -257,8 +266,9 @@ export default function LiftPage() {
     setNewPRs([]);
     // Start with no exercises hidden — fresh workout, full template visible.
     setHiddenExercises(new Set());
-    // Fresh notes field.
+    // Fresh notes + mood.
     setSessionNotes("");
+    setSessionMood(null);
 
     // Initialize the form: each exercise starts with `targetSets` empty rows.
     const initial: Record<string, ExerciseForm> = {};
@@ -517,6 +527,7 @@ export default function LiftPage() {
         template_name: activeTemplate.name,
         date: logDate,
         notes: trimmedNotes.length > 0 ? trimmedNotes : null,
+        mood: sessionMood,
       })
       .select()
       .single();
@@ -553,6 +564,7 @@ export default function LiftPage() {
     setActiveTemplate(null);
     setForms({});
     setSessionNotes("");
+    setSessionMood(null);
     // Refresh the recent-sessions list so the new workout shows up.
     loadPastSessions();
     loadExerciseHistory();
@@ -563,6 +575,7 @@ export default function LiftPage() {
       setActiveTemplate(null);
       setForms({});
       setSessionNotes("");
+      setSessionMood(null);
       setErrorMsg(null);
     }
   }
@@ -612,6 +625,13 @@ export default function LiftPage() {
 
     setEditGroups(groups);
     setEditNotes(session.notes ?? "");
+    // Narrow the DB int to the Mood literal union. The DB constraint already
+    // guarantees it's 1-5 or null, so the cast is safe.
+    setEditMood(
+      session.mood != null
+        ? ((session.mood as 1 | 2 | 3 | 4 | 5) ?? null)
+        : null
+    );
     setEditingSession(session);
   }
 
@@ -619,6 +639,7 @@ export default function LiftPage() {
     setEditingSession(null);
     setEditGroups([]);
     setEditNotes("");
+    setEditMood(null);
     setErrorMsg(null);
   }
 
@@ -696,12 +717,15 @@ export default function LiftPage() {
       });
     }
 
-    // Step 0: push the edited notes back to lift_sessions. Treat empty
-    // input as NULL so the coach summary / AI prompt skip it cleanly.
+    // Step 0: push the edited notes + mood back to lift_sessions. Treat
+    // empty input as NULL so the coach summary / AI prompt skip it cleanly.
     const trimmedNotes = editNotes.trim();
     const { error: notesError } = await supabase
       .from("lift_sessions")
-      .update({ notes: trimmedNotes.length > 0 ? trimmedNotes : null })
+      .update({
+        notes: trimmedNotes.length > 0 ? trimmedNotes : null,
+        mood: editMood,
+      })
       .eq("id", editingSession.id);
     if (notesError) {
       setErrorMsg(`Failed to update notes: ${notesError.message}`);
@@ -740,6 +764,7 @@ export default function LiftPage() {
     setEditingSession(null);
     setEditGroups([]);
     setEditNotes("");
+    setEditMood(null);
     // Refresh the picker list so counts and most-recent order are correct.
     loadPastSessions();
     loadExerciseHistory();
@@ -806,22 +831,25 @@ export default function LiftPage() {
           </button>
         </header>
 
-        {/* Session notes editor — always visible, even when no sets exist. */}
-        <section className="mb-4 p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-          <label
-            htmlFor="edit-session-notes"
-            className="text-xs font-medium text-zinc-500"
-          >
-            How were you feeling? (notes)
-          </label>
-          <textarea
-            id="edit-session-notes"
-            value={editNotes}
-            onChange={(e) => setEditNotes(e.target.value)}
-            rows={3}
-            placeholder="Energy, sleep, soreness, focus — whatever's worth remembering…"
-            className="mt-2 w-full text-sm bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg p-2 resize-y"
-          />
+        {/* Session mood + notes editor — always visible, even when no sets exist. */}
+        <section className="mb-4 p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4">
+          <MoodPicker value={editMood} onChange={setEditMood} />
+          <div>
+            <label
+              htmlFor="edit-session-notes"
+              className="text-xs font-medium text-zinc-500"
+            >
+              Notes
+            </label>
+            <textarea
+              id="edit-session-notes"
+              value={editNotes}
+              onChange={(e) => setEditNotes(e.target.value)}
+              rows={3}
+              placeholder="Energy, sleep, soreness, focus — whatever's worth remembering…"
+              className="mt-2 w-full text-sm bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg p-2 resize-y"
+            />
+          </div>
         </section>
 
         {editGroups.length === 0 ? (
@@ -1027,6 +1055,7 @@ export default function LiftPage() {
           <ul className="space-y-2">
             {pastSessions.map((s) => {
               const hasNote = (s.notes ?? "").trim().length > 0;
+              const mood = moodEmoji(s.mood);
               return (
                 <li
                   key={s.id}
@@ -1037,8 +1066,10 @@ export default function LiftPage() {
                     className="flex-1 min-w-0 text-left"
                     aria-label={`Edit ${s.template_name} from ${relativeLabel(s.date)}`}
                   >
-                    <div className="text-sm font-semibold truncate">
-                      🏋️ {s.template_name}
+                    <div className="text-sm font-semibold truncate flex items-center gap-1.5">
+                      <span>🏋️</span>
+                      <span className="truncate">{s.template_name}</span>
+                      {mood && <span className="text-base ml-auto pr-1">{mood}</span>}
                     </div>
                     <div className="text-xs text-zinc-500">
                       {relativeLabel(s.date)} · {s.set_count ?? 0} sets
@@ -1237,22 +1268,27 @@ export default function LiftPage() {
         </button>
       )}
 
-      {/* Session notes — jot down how you were feeling while it's fresh. */}
-      <section className="mt-6 p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
-        <label
-          htmlFor="session-notes"
-          className="text-xs font-medium text-zinc-500"
-        >
-          How were you feeling? (optional)
-        </label>
-        <textarea
-          id="session-notes"
-          value={sessionNotes}
-          onChange={(e) => setSessionNotes(e.target.value)}
-          rows={3}
-          placeholder="Energy, sleep, soreness, focus — whatever's worth remembering…"
-          className="mt-2 w-full text-sm bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg p-2 resize-y"
-        />
+      {/* Mood + notes — jot down how you were feeling while it's fresh.
+          The emoji scale is a quick one-tap rating; the textarea is for
+          anything more specific you want to remember. */}
+      <section className="mt-6 p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4">
+        <MoodPicker value={sessionMood} onChange={setSessionMood} />
+        <div>
+          <label
+            htmlFor="session-notes"
+            className="text-xs font-medium text-zinc-500"
+          >
+            Notes (optional)
+          </label>
+          <textarea
+            id="session-notes"
+            value={sessionNotes}
+            onChange={(e) => setSessionNotes(e.target.value)}
+            rows={3}
+            placeholder="Energy, sleep, soreness, focus — whatever's worth remembering…"
+            className="mt-2 w-full text-sm bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg p-2 resize-y"
+          />
+        </div>
       </section>
 
       {errorMsg && (

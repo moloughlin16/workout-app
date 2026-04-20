@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
 
       supabase
         .from("lift_sessions")
-        .select("id, date, template_name, notes")
+        .select("id, date, template_name, notes, mood")
         .gte("date", weekStart)
         .order("date", { ascending: true }),
 
@@ -113,11 +113,17 @@ export async function POST(request: NextRequest) {
     }
 
     if (liftSessions.length > 0) {
+      // Map mood int 1-5 back to a human-readable label so Claude sees
+      // "Drained" instead of an opaque 2. Mirrors the MoodPicker scale.
+      const MOOD_LABELS = ["", "Drained", "Low", "Okay", "Good", "Strong"];
       trainingData += `### Lifting (${liftSessions.length} sessions)\n`;
       for (const session of liftSessions) {
         trainingData += `- ${session.date} | ${session.template_name}`;
+        if (session.mood != null && session.mood >= 1 && session.mood <= 5) {
+          trainingData += ` | Mood: ${MOOD_LABELS[session.mood]} (${session.mood}/5)`;
+        }
         if (session.notes) {
-          trainingData += ` | Feeling: "${session.notes}"`;
+          trainingData += ` | Notes: "${session.notes}"`;
         }
         trainingData += "\n";
         const sessionSets = liftSets.filter(
