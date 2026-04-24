@@ -6,6 +6,11 @@ import { todayLocal, relativeLabel } from "@/lib/date";
 import ExerciseProgressChart from "@/components/ExerciseProgressChart";
 import RestTimer from "@/components/RestTimer";
 import MoodPicker, { moodEmoji } from "@/components/MoodPicker";
+import {
+  clearWorkout,
+  loadWorkout,
+  saveWorkout,
+} from "@/lib/workout-persistence";
 
 // ============================================================
 // TEMPLATE DEFINITIONS
@@ -29,6 +34,19 @@ type Template = {
   exercises: ExerciseDef[];
 };
 
+// Curated list of exercises shown in the "Progress" section on the lift
+// picker view. Limited to the main compound lifts the user wants to track.
+// If you ever want to expose progress for a different exercise, just add
+// its name (must match the TEMPLATES entry exactly, including parens).
+const TRACKED_FOR_PROGRESS = new Set([
+  "Squat (or Trap Bar DL)",
+  "Bench Press",
+  "Overhead Press",
+  "Assisted Pull-ups",
+  "RDL (or SLDL)",
+  "Upright Row",
+]);
+
 const TEMPLATES: Template[] = [
   {
     name: "Full Body 1",
@@ -36,7 +54,7 @@ const TEMPLATES: Template[] = [
     exercises: [
       { name: "Squat (or Trap Bar DL)", targetSets: 4, targetReps: "3-5" },
       { name: "Bench Press", targetSets: 3, targetReps: "4-6" },
-      { name: "Chest-Supported Row", targetSets: 3, targetReps: "6-10" },
+      { name: "Upright Row", targetSets: 3, targetReps: "6-10" },
       { name: "Assisted Pull-ups", targetSets: 3, targetReps: "6-10" },
       { name: "Bulgarian Split Squat", targetSets: 3, targetReps: "6-8 ea" },
       { name: "Step-ups", targetSets: 3, targetReps: "6-10 ea", note: "bodyweight, controlled" },
@@ -182,7 +200,49 @@ export default function LiftPage() {
   useEffect(() => {
     loadPastSessions();
     loadExerciseHistory();
+    // Try to restore an in-progress workout from localStorage. Wrapped so
+    // a parsing error or missing template doesn't block the rest of mount.
+    try {
+      const saved = loadWorkout();
+      if (saved) {
+        const template = TEMPLATES.find((t) => t.name === saved.templateName);
+        if (template) {
+          setActiveTemplate(template);
+          setForms(saved.forms);
+          setHiddenExercises(new Set(saved.hiddenExercises));
+          setSessionNotes(saved.sessionNotes);
+          setSessionMood(saved.sessionMood);
+          setLogDate(saved.logDate);
+          // Re-fetch last-time hints so the green "Last:" lines appear.
+          fetchLastTimes(template.exercises.map((e) => e.name));
+        }
+      }
+    } catch (err) {
+      console.error("Failed to restore workout:", err);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Persist the active workout on every relevant state change. Cheap to
+  // run on each keystroke — localStorage writes are sync but tiny.
+  useEffect(() => {
+    if (!activeTemplate) return; // Only persist while a workout is in progress.
+    saveWorkout({
+      templateName: activeTemplate.name,
+      forms,
+      hiddenExercises: Array.from(hiddenExercises),
+      sessionNotes,
+      sessionMood,
+      logDate,
+    });
+  }, [
+    activeTemplate,
+    forms,
+    hiddenExercises,
+    sessionNotes,
+    sessionMood,
+    logDate,
+  ]);
 
   // Fetch distinct exercise names across all time, ordered by most recent.
   // Supabase/PostgREST has no DISTINCT operator, so we fetch the name column
@@ -256,9 +316,56 @@ export default function LiftPage() {
     setLoadingPast(false);
   }
 
-  // When user picks a template, initialize empty form state for each exercise
-  // and kick off a fetch of last-time data for each.
-  function startTemplate(template: Template) {
+  /**
+   * For each exercise, find the LAST session it appeared in and return all
+   * sets from that session. Used to pre-fill the active workout form so the
+   * user only has to adjust whatever's different from last time.
+   *
+   * Two queries per exercise (find latest session, then fetch its sets),
+   * fired in parallel across exercises.
+   */
+  async function fetchLastSessionSets(
+    exerciseNames: string[]
+  ): Promise<Record<string, { weight_lb: number | null; reps: number | null }[]>> {
+    const out: Record<string, { weight_lb: number | null; reps: number | null }[]> = {};
+    await Promise.all(
+      exerciseNames.map(async (name) => {
+        // Find the most recent session_id for this exercise.
+        const { data: latest } = await supabase
+          .from("lift_sets")
+          .select("session_id")
+          .eq("exercise_name", name)
+          .order("created_at", { ascending: false })
+          .limit(1);
+
+        if (!latest || latest.length === 0) {
+          out[name] = [];
+          return;
+        }
+
+        const sessionId = latest[0].session_id;
+
+        // Pull every set this exercise had in that session, ordered by set #.
+        const { data: sets } = await supabase
+          .from("lift_sets")
+          .select("weight_lb, reps, set_number")
+          .eq("exercise_name", name)
+          .eq("session_id", sessionId)
+          .order("set_number", { ascending: true });
+
+        out[name] = (sets ?? []).map((s) => ({
+          weight_lb: s.weight_lb,
+          reps: s.reps,
+        }));
+      })
+    );
+    return out;
+  }
+
+  // When user picks a template, initialize the form pre-filled with last
+  // session's values for each exercise. Sets the "Last:" hint above each
+  // exercise card too (via fetchLastTimes).
+  async function startTemplate(template: Template) {
     setActiveTemplate(template);
     setSuccessMsg(null);
     setErrorMsg(null);
@@ -270,17 +377,40 @@ export default function LiftPage() {
     setSessionNotes("");
     setSessionMood(null);
 
-    // Initialize the form: each exercise starts with `targetSets` empty rows.
-    const initial: Record<string, ExerciseForm> = {};
+    // First — drop empty placeholder rows so the form renders immediately.
+    // The pre-filled values arrive once the DB queries return below.
+    const blank: Record<string, ExerciseForm> = {};
     for (const ex of template.exercises) {
-      initial[ex.name] = {
+      blank[ex.name] = {
         sets: Array.from({ length: ex.targetSets }, () => ({ weight: "", reps: "" })),
       };
     }
-    setForms(initial);
+    setForms(blank);
 
-    // Fetch "last time" for each exercise in parallel.
-    fetchLastTimes(template.exercises.map((e) => e.name));
+    // Fire both fetches in parallel: the "Last:" hint and the pre-fill data.
+    const [lastSession] = await Promise.all([
+      fetchLastSessionSets(template.exercises.map((e) => e.name)),
+      fetchLastTimes(template.exercises.map((e) => e.name)),
+    ]);
+
+    // Now build the real pre-filled form from last session's sets.
+    // Pad/truncate to match template.targetSets — if you did 5 sets last time
+    // and the template only asks for 3, pre-fill 1-3. If you did 2 sets and
+    // template wants 3, the third row gets the LAST entered value as its hint.
+    const prefilled: Record<string, ExerciseForm> = {};
+    for (const ex of template.exercises) {
+      const last = lastSession[ex.name] ?? [];
+      prefilled[ex.name] = {
+        sets: Array.from({ length: ex.targetSets }, (_, i) => {
+          const ref = last[i] ?? last[last.length - 1] ?? null;
+          return {
+            weight: ref?.weight_lb != null ? String(ref.weight_lb) : "",
+            reps: ref?.reps != null ? String(ref.reps) : "",
+          };
+        }),
+      };
+    }
+    setForms(prefilled);
   }
 
   // Hide one exercise from the active workout (e.g., "skip optional curls").
@@ -331,6 +461,38 @@ export default function LiftPage() {
       const newSets = exerciseForm.sets.map((s, i) =>
         i === setIdx ? { ...s, [field]: value } : s
       );
+      exerciseForm.sets = newSets;
+      copy[exerciseName] = exerciseForm;
+      return copy;
+    });
+  }
+
+  /**
+   * Stepper-style adjust for a numeric set field. Empty → starts at `delta`
+   * for positive bumps (so tapping + on a blank row gets you "5" or "1"),
+   * stays empty for negative bumps. Clamps at 0.
+   */
+  function bumpSet(
+    exerciseName: string,
+    setIdx: number,
+    field: "weight" | "reps",
+    delta: number
+  ) {
+    setForms((prev) => {
+      const copy = { ...prev };
+      const exerciseForm = { ...copy[exerciseName] };
+      const newSets = exerciseForm.sets.map((s, i) => {
+        if (i !== setIdx) return s;
+        const current = s[field].trim();
+        if (current === "" && delta < 0) return s; // can't go below zero from blank
+        const num = current === "" ? 0 : parseFloat(current);
+        if (Number.isNaN(num)) return s;
+        // Round to 1 decimal so we don't accumulate float dust like 137.5000001.
+        const next = Math.max(0, Math.round((num + delta) * 10) / 10);
+        // Drop the .0 for integers so the input stays tidy (5 not 5.0).
+        const formatted = next % 1 === 0 ? String(next) : String(next);
+        return { ...s, [field]: formatted };
+      });
       exerciseForm.sets = newSets;
       copy[exerciseName] = exerciseForm;
       return copy;
@@ -565,6 +727,9 @@ export default function LiftPage() {
     setForms({});
     setSessionNotes("");
     setSessionMood(null);
+    // Saved successfully — the in-progress copy in localStorage is no
+    // longer needed, and leaving it would re-resume on next visit.
+    clearWorkout();
     // Refresh the recent-sessions list so the new workout shows up.
     loadPastSessions();
     loadExerciseHistory();
@@ -577,6 +742,7 @@ export default function LiftPage() {
       setSessionNotes("");
       setSessionMood(null);
       setErrorMsg(null);
+      clearWorkout();
     }
   }
 
@@ -1094,14 +1260,17 @@ export default function LiftPage() {
           </ul>
         </section>
 
-        {/* Progress — tap an exercise to see its history chart */}
-        {exerciseHistory.length > 0 && (
+        {/* Progress — tap an exercise to see its history chart.
+            Only the curated TRACKED_FOR_PROGRESS lifts appear here. */}
+        {exerciseHistory.filter((n) => TRACKED_FOR_PROGRESS.has(n)).length > 0 && (
           <section className="mt-8 mb-4">
             <h3 className="text-sm font-medium text-zinc-500 mb-2">
               Progress
             </h3>
             <ul className="space-y-2">
-              {exerciseHistory.map((name) => {
+              {exerciseHistory
+                .filter((n) => TRACKED_FOR_PROGRESS.has(n))
+                .map((name) => {
                 const isOpen = openExercise === name;
                 return (
                   <li
@@ -1212,33 +1381,69 @@ export default function LiftPage() {
                 <p className="text-xs text-zinc-400 mt-1">No history yet</p>
               )}
 
-              {/* Set input rows */}
+              {/* Set input rows. ± buttons step weight by 5 and reps by 1
+                  for one-tap adjustments. The number itself is still
+                  tappable if you want to type a non-standard value. */}
               <div className="mt-3 space-y-2">
                 {form?.sets.map((s, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-zinc-400 w-6">
+                  <div key={idx} className="flex items-center gap-1">
+                    <span className="text-xs font-semibold text-zinc-400 w-5 flex-shrink-0">
                       #{idx + 1}
                     </span>
+                    {/* Weight stepper */}
+                    <button
+                      type="button"
+                      onClick={() => bumpSet(ex.name, idx, "weight", -5)}
+                      className="flex-shrink-0 w-7 h-9 flex items-center justify-center rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 text-base font-semibold active:bg-zinc-200 dark:active:bg-zinc-700"
+                      aria-label="Decrease weight by 5"
+                    >
+                      −
+                    </button>
                     <input
                       type="number"
                       inputMode="decimal"
                       placeholder="lb"
                       value={s.weight}
                       onChange={(e) => updateSet(ex.name, idx, "weight", e.target.value)}
-                      className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-sm"
+                      className="w-14 px-2 py-2 rounded bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-sm text-center"
                     />
-                    <span className="text-zinc-400 text-sm">×</span>
+                    <button
+                      type="button"
+                      onClick={() => bumpSet(ex.name, idx, "weight", 5)}
+                      className="flex-shrink-0 w-7 h-9 flex items-center justify-center rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 text-base font-semibold active:bg-zinc-200 dark:active:bg-zinc-700"
+                      aria-label="Increase weight by 5"
+                    >
+                      +
+                    </button>
+                    <span className="text-zinc-400 text-sm flex-shrink-0 px-0.5">×</span>
+                    {/* Reps stepper */}
+                    <button
+                      type="button"
+                      onClick={() => bumpSet(ex.name, idx, "reps", -1)}
+                      className="flex-shrink-0 w-7 h-9 flex items-center justify-center rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 text-base font-semibold active:bg-zinc-200 dark:active:bg-zinc-700"
+                      aria-label="Decrease reps"
+                    >
+                      −
+                    </button>
                     <input
                       type="number"
                       inputMode="numeric"
                       placeholder={ex.unit === "sec" ? "sec" : "reps"}
                       value={s.reps}
                       onChange={(e) => updateSet(ex.name, idx, "reps", e.target.value)}
-                      className="flex-1 min-w-0 px-3 py-2 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-sm"
+                      className="w-12 px-1.5 py-2 rounded bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 text-sm text-center"
                     />
                     <button
+                      type="button"
+                      onClick={() => bumpSet(ex.name, idx, "reps", 1)}
+                      className="flex-shrink-0 w-7 h-9 flex items-center justify-center rounded bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 text-base font-semibold active:bg-zinc-200 dark:active:bg-zinc-700"
+                      aria-label="Increase reps"
+                    >
+                      +
+                    </button>
+                    <button
                       onClick={() => removeSet(ex.name, idx)}
-                      className="text-zinc-400 hover:text-red-500 text-lg px-1"
+                      className="ml-auto text-zinc-400 hover:text-red-500 text-lg px-1 flex-shrink-0"
                       aria-label="Remove set"
                     >
                       ×

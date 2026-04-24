@@ -21,79 +21,122 @@ function labelFor(seconds: number): string {
   return `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, "0")}`;
 }
 
+// Internal state machine. Using a discriminated union makes the four
+// phases unambiguous — there's never an in-between "running but no endsAt"
+// state to think about.
+type Phase =
+  | { kind: "idle" }
+  | { kind: "running"; endsAt: number; initial: number }
+  | { kind: "paused"; remaining: number; initial: number }
+  | { kind: "finished"; initial: number };
+
+// Wake Lock API isn't in lib.dom.d.ts in older TS targets, so spell out
+// the bit we use.
+type WakeLockSentinel = { release: () => Promise<void> };
+
 /**
  * Sticky rest timer used on the active lift workout view.
  *
- * State machine:
- *   idle     — no timer configured. Show preset buttons only.
- *   running  — counting down. Show big countdown + controls.
- *   paused   — countdown frozen at `remaining`. Same card, "Resume" button.
- *   finished — countdown hit 0. Show "Done!" until user acknowledges.
+ * Robustness vs the previous version:
+ *   - Time-keeping is **timestamp-based**, not tick-decrement. We store the
+ *     epoch-ms instant the timer should hit 0 and compute `remaining` from
+ *     `endsAt - now()` on every render. So when the OS throttles JS in the
+ *     background, the timer doesn't drift — when the page wakes back up,
+ *     it sees the correct elapsed time immediately.
+ *   - **Wake Lock API**: while running we hold a screen wake lock so the
+ *     phone won't auto-sleep mid-rest. The browser auto-releases the lock
+ *     when the page is hidden (e.g. you switch apps); the visibilitychange
+ *     handler re-acquires it when you come back.
+ *   - Caveat: if you switch apps or lock the phone, JS pauses entirely
+ *     (a real PWA limitation, not something we can fix in the browser).
+ *     When you return to the app, the timer recomputes — if it should have
+ *     ended while you were away, it fires the beep + "Done!" banner immediately.
  *
- * Implementation notes:
- *   - `useEffect` + `setInterval` drives the countdown. We subtract one from
- *     `remaining` every second and tear the interval down when the effect
- *     re-runs or the component unmounts.
- *   - When `remaining` hits 0 we play a beep and vibrate (Android only).
- *     The AudioContext is created inside the user's tap handler because
- *     iOS Safari blocks audio that wasn't triggered by user interaction.
- *   - `tabular-nums` Tailwind class keeps the digits the same width so the
- *     countdown doesn't jiggle as it changes (e.g. 1→2 is different width).
+ * Audio note: on iOS Safari, the AudioContext must be created during a
+ * user gesture, so we lazily create it on the first preset tap and reuse
+ * it for the beep when the timer ends.
  */
 export default function RestTimer() {
-  // Remaining seconds. Counts down from `initial` to 0.
-  const [remaining, setRemaining] = useState(0);
-  // Whether the countdown is actively ticking.
-  const [running, setRunning] = useState(false);
-  // The duration we started with — used for the progress bar percentage
-  // and to distinguish "idle" (initial=0) from "finished" (initial>0).
-  const [initial, setInitial] = useState(0);
+  const [phase, setPhase] = useState<Phase>({ kind: "idle" });
+  // Forces a re-render every 250ms while running, so the displayed
+  // countdown updates. We don't store seconds-remaining as state — that's
+  // derived from `phase.endsAt` and `Date.now()`.
+  const [, setTick] = useState(0);
 
-  // Cache the AudioContext across renders. Created once on the first
-  // user interaction (preset tap) so iOS Safari will allow sound.
   const audioCtxRef = useRef<AudioContext | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  // Guards against firing the beep twice if the "ran out" effect re-runs
+  // before phase has settled to "finished". Reset whenever we leave running.
+  const beepFiredRef = useRef(false);
 
-  // ── Countdown tick ──────────────────────────────────────────────
+  // ── Tick: re-render at 250ms while running ──────────────────────
   useEffect(() => {
-    if (!running) return;
-    const id = setInterval(() => {
-      setRemaining((r) => {
-        if (r <= 1) {
-          // Timer hit 0 — stop, beep, vibrate.
-          setRunning(false);
-          playBeep();
-          if (typeof navigator !== "undefined" && navigator.vibrate) {
-            navigator.vibrate([200, 100, 200]);
-          }
-          return 0;
-        }
-        return r - 1;
-      });
-    }, 1000);
-    // Cleanup: stop the interval whenever `running` flips off or the
-    // component unmounts. Without this, stale intervals would leak.
+    if (phase.kind !== "running") return;
+    const id = setInterval(() => setTick((t) => t + 1), 250);
     return () => clearInterval(id);
-  }, [running]);
+  }, [phase.kind]);
+
+  // ── Detect zero crossing on every render while running ──────────
+  // No deps array — runs after every commit. The `beepFiredRef` guard
+  // ensures the beep only fires once per timer.
+  useEffect(() => {
+    if (phase.kind !== "running") {
+      beepFiredRef.current = false;
+      return;
+    }
+    if (Date.now() >= phase.endsAt && !beepFiredRef.current) {
+      beepFiredRef.current = true;
+      playBeep();
+      if (typeof navigator !== "undefined" && navigator.vibrate) {
+        navigator.vibrate([200, 100, 200]);
+      }
+      releaseWakeLock();
+      setPhase({ kind: "finished", initial: phase.initial });
+    }
+  });
+
+  // ── Visibility: re-acquire wake lock + recompute when returning ──
+  useEffect(() => {
+    function onVisChange() {
+      if (
+        typeof document !== "undefined" &&
+        document.visibilityState === "visible" &&
+        phase.kind === "running"
+      ) {
+        requestWakeLock();
+        setTick((t) => t + 1); // force a render to re-eval `remaining`
+      }
+    }
+    if (typeof document === "undefined") return;
+    document.addEventListener("visibilitychange", onVisChange);
+    return () =>
+      document.removeEventListener("visibilitychange", onVisChange);
+  }, [phase.kind]);
+
+  // ── Release wake lock on unmount ────────────────────────────────
+  useEffect(() => {
+    return () => {
+      releaseWakeLock();
+    };
+  }, []);
 
   /** Lazily create (and resume, if suspended) the AudioContext. */
   function ensureAudioCtx(): AudioContext | null {
     if (typeof window === "undefined") return null;
     if (!audioCtxRef.current) {
-      // The `webkit` fallback is for older Safari; modern browsers use AudioContext.
       type WebkitWindow = Window & { webkitAudioContext?: typeof AudioContext };
       const w = window as WebkitWindow;
       const Ctor = window.AudioContext || w.webkitAudioContext;
       if (!Ctor) return null;
       audioCtxRef.current = new Ctor();
     }
-    // If the context was suspended (e.g. backgrounded), try to resume it.
     if (audioCtxRef.current.state === "suspended") {
       audioCtxRef.current.resume().catch(() => {});
     }
     return audioCtxRef.current;
   }
 
-  /** Play a 500ms A5 (880Hz) sine beep. Silent if audio isn't available. */
+  /** Play a 500ms A5 sine beep. Silent if audio isn't available. */
   function playBeep() {
     const ctx = audioCtxRef.current;
     if (!ctx) return;
@@ -102,7 +145,6 @@ export default function RestTimer() {
       const gain = ctx.createGain();
       osc.type = "sine";
       osc.frequency.value = 880;
-      // Quick attack, exponential decay — rings like a kitchen timer.
       gain.gain.setValueAtTime(0.3, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
       osc.connect(gain);
@@ -110,39 +152,105 @@ export default function RestTimer() {
       osc.start();
       osc.stop(ctx.currentTime + 0.5);
     } catch {
-      /* best-effort — never crash the UI over a beep */
+      /* best-effort */
     }
   }
 
+  async function requestWakeLock() {
+    if (typeof navigator === "undefined" || !("wakeLock" in navigator)) return;
+    try {
+      const nav = navigator as Navigator & {
+        wakeLock?: { request: (kind: "screen") => Promise<WakeLockSentinel> };
+      };
+      const sentinel = await nav.wakeLock?.request("screen");
+      if (sentinel) wakeLockRef.current = sentinel;
+    } catch {
+      // Some browsers throw when the page is hidden; safe to ignore.
+    }
+  }
+
+  async function releaseWakeLock() {
+    if (wakeLockRef.current) {
+      try {
+        await wakeLockRef.current.release();
+      } catch {
+        /* ignore */
+      }
+      wakeLockRef.current = null;
+    }
+  }
+
+  // ── Actions ─────────────────────────────────────────────────────
   function start(seconds: number) {
-    ensureAudioCtx(); // Created here (user tap) so iOS will allow the beep later.
-    setInitial(seconds);
-    setRemaining(seconds);
-    setRunning(true);
+    ensureAudioCtx();
+    requestWakeLock();
+    setPhase({
+      kind: "running",
+      endsAt: Date.now() + seconds * 1000,
+      initial: seconds,
+    });
   }
 
   function togglePause() {
-    setRunning((r) => !r);
-  }
-
-  function dismiss() {
-    setRunning(false);
-    setRemaining(0);
-    setInitial(0);
+    if (phase.kind === "running") {
+      const remaining = Math.max(
+        0,
+        Math.ceil((phase.endsAt - Date.now()) / 1000)
+      );
+      releaseWakeLock();
+      setPhase({ kind: "paused", remaining, initial: phase.initial });
+    } else if (phase.kind === "paused") {
+      requestWakeLock();
+      setPhase({
+        kind: "running",
+        endsAt: Date.now() + phase.remaining * 1000,
+        initial: phase.initial,
+      });
+    }
   }
 
   function adjust(delta: number) {
-    setRemaining((r) => Math.max(0, r + delta));
-    // If we were finished and the user hits "+10s", resume the countdown.
-    if (!running && remaining === 0 && delta > 0) setRunning(true);
+    if (phase.kind === "running") {
+      const newEnd = phase.endsAt + delta * 1000;
+      if (newEnd <= Date.now()) {
+        // Adjusted past zero — just end now.
+        playBeep();
+        if (typeof navigator !== "undefined" && navigator.vibrate) {
+          navigator.vibrate([200, 100, 200]);
+        }
+        releaseWakeLock();
+        setPhase({ kind: "finished", initial: phase.initial });
+      } else {
+        setPhase({ ...phase, endsAt: newEnd });
+      }
+    } else if (phase.kind === "paused") {
+      const next = Math.max(0, phase.remaining + delta);
+      setPhase({ ...phase, remaining: next });
+    } else if (phase.kind === "finished" && delta > 0) {
+      // +10s on the "Done!" card — restart with that much time.
+      start(delta);
+    }
   }
 
-  const isIdle = remaining === 0 && !running && initial === 0;
-  const isFinished = remaining === 0 && !running && initial > 0;
+  function dismiss() {
+    releaseWakeLock();
+    setPhase({ kind: "idle" });
+  }
+
+  // ── Derived values for render ───────────────────────────────────
+  const remaining =
+    phase.kind === "running"
+      ? Math.max(0, Math.ceil((phase.endsAt - Date.now()) / 1000))
+      : phase.kind === "paused"
+        ? phase.remaining
+        : 0;
+
+  const initial = phase.kind === "idle" ? 0 : phase.initial;
   const progress = initial > 0 ? ((initial - remaining) / initial) * 100 : 0;
+  const running = phase.kind === "running";
 
   // ── Idle: compact preset row ────────────────────────────────────
-  if (isIdle) {
+  if (phase.kind === "idle") {
     return (
       <div className="sticky top-0 z-10 -mx-6 px-6 py-2.5 bg-zinc-50/90 dark:bg-zinc-950/90 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800">
         <div className="flex items-center gap-1.5 overflow-x-auto">
@@ -164,7 +272,7 @@ export default function RestTimer() {
   }
 
   // ── Finished: "Done!" banner ────────────────────────────────────
-  if (isFinished) {
+  if (phase.kind === "finished") {
     return (
       <div className="sticky top-0 z-10 -mx-6 px-6 py-2.5 bg-zinc-50/90 dark:bg-zinc-950/90 backdrop-blur-sm border-b border-zinc-200 dark:border-zinc-800">
         <div className="p-3 rounded-xl bg-indigo-100 dark:bg-indigo-900/30 border border-indigo-300 dark:border-indigo-800 flex items-center justify-between gap-3">
@@ -231,10 +339,9 @@ export default function RestTimer() {
             </button>
           </div>
         </div>
-        {/* Progress bar — smooth linear fill from 0 to 100% over the rest. */}
         <div className="mt-2 h-1.5 w-full rounded-full bg-indigo-200 dark:bg-indigo-900/60 overflow-hidden">
           <div
-            className="h-full bg-indigo-600 dark:bg-indigo-400 transition-all duration-1000 ease-linear"
+            className="h-full bg-cyan-500 transition-all duration-1000 ease-linear"
             style={{ width: `${progress}%` }}
           />
         </div>

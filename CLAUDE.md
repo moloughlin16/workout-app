@@ -56,6 +56,9 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
   - **`unit: "sec"` field** on `ExerciseDef` — when set, the second input shows `sec` instead of `reps` and the history label appends "sec". Currently used for Plank. Stored value is still in the `reps` integer column; only the UI label differs.
   - "Finish Workout" inserts parent `lift_sessions` row then bulk-inserts `lift_sets`
   - **Session notes + mood** — textarea saves to `lift_sessions.notes`; a 5-emoji `MoodPicker` (😩 😕 😐 🙂 💪 → int 1-5) saves to `lift_sessions.mood`. Both live in a card above the "Finish Workout" button on the active workout view, and again at the top of the edit view. Notes preview + mood emoji are shown in the Recent sessions list. Both are fed into the AI weekly summary prompt (mood is translated back to "Drained/Low/Okay/Good/Strong" for Claude).
+  - **Workout persistence** — `src/lib/workout-persistence.ts` saves the in-progress workout (template, forms, hidden exercises, mood, notes, logDate) to localStorage on every state change with an 8-hour TTL. Restored on mount of the lift page if any. Cleared on Finish or Cancel.
+  - **Pre-fill from last session** — `startTemplate()` queries each exercise's most-recent session and pre-fills every set with that session's values (set #1 → last set #1, etc.). User can adjust with the stepper buttons (± 5 lb for weight, ± 1 for reps) or type directly.
+  - **Progress section filter** — only the 6 curated compound lifts (Squat, Bench, OHP, Assisted Pull-ups, RDL/SLDL, Upright Row) appear under "Progress" via the `TRACKED_FOR_PROGRESS` constant. Other exercises still log fine, just don't get a chart entry.
 - [x] **Bottom nav** (`src/components/BottomNav.tsx`): fixed nav bar with Martial Arts + Lift tabs, active-tab highlight via `usePathname()`
 - [x] **Shared date helpers** (`src/lib/date.ts`): `todayLocal()`, `formatLocalDate()`, `startOfWeekLocal()`, `relativeLabel()` — all use LOCAL time, not UTC, to avoid off-by-one bugs near midnight.
 - [x] `src/lib/supabase.ts` shared client
@@ -171,7 +174,7 @@ The actual source of truth is the `TEMPLATES` constant in `src/app/lift/page.tsx
 ### Full Body 1 — Strength (controlled, submaximal)
 1. Squat (or Trap Bar DL) — 4 × 3-5
 2. Bench Press — 3 × 4-6
-3. Chest-Supported Row — 3 × 6-10
+3. Upright Row — 3 × 6-10
 4. Assisted Pull-ups — 3 × 6-10
 5. Bulgarian Split Squat — 3 × 6-8 ea
 6. Step-ups — 3 × 6-10 ea (note: bodyweight, controlled)
