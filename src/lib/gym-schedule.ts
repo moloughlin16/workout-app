@@ -84,6 +84,7 @@ export const GYM_SCHEDULE: Record<DayOfWeek, GymClass[]> = {
   ],
   Thursday: [
     { start: "07:30", end: "08:30", name: "Gi BJJ", discipline: "Grappling" },
+    { start: "11:00", end: "12:00", name: "Dutch Kickboxing", discipline: "Kickboxing" },
     { start: "12:00", end: "13:00", name: "NoGi BJJ", discipline: "Grappling" },
     { start: "16:30", end: "17:30", name: "NoGi BJJ", discipline: "Grappling" },
     { start: "17:45", end: "18:45", name: "Kickboxing Fundamentals", discipline: "Kickboxing" },
