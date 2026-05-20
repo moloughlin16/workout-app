@@ -9,6 +9,7 @@ import {
   Tooltip,
 } from "recharts";
 import { supabase } from "@/lib/supabase";
+import { addDays, todayLocal } from "@/lib/date";
 
 // Map each discipline to a distinct color. We reuse the same palette across
 // the app (e.g. MMA always red) so the visual language stays consistent.
@@ -33,19 +34,61 @@ type Slice = {
   emoji: string;
 };
 
+// Date-range presets shown in the filter row. "all" = no filter (earliest
+// tracked date through today), the rest are rolling windows from today.
+type RangePreset = "all" | "30d" | "90d" | "1y" | "custom";
+
+const PRESETS: { id: RangePreset; label: string }[] = [
+  { id: "all", label: "All time" },
+  { id: "30d", label: "30d" },
+  { id: "90d", label: "90d" },
+  { id: "1y", label: "1y" },
+  { id: "custom", label: "Custom" },
+];
+
 export default function DisciplinePieChart() {
   const [slices, setSlices] = useState<Slice[]>([]);
   const [loading, setLoading] = useState(true);
   const [totalMinutes, setTotalMinutes] = useState(0);
 
+  // Filter state.
+  const [preset, setPreset] = useState<RangePreset>("all");
+  // Custom range inputs — only used when preset === "custom".
+  // Default the custom-end to today and the custom-start to 30 days ago
+  // so picking "Custom" gives a useful starting point.
+  const [customStart, setCustomStart] = useState<string>(addDays(todayLocal(), -30));
+  const [customEnd, setCustomEnd] = useState<string>(todayLocal());
+
+  /** Resolves the current filter state to a concrete (start, end) date pair. */
+  function computeRange(): { start: string | null; end: string | null } {
+    if (preset === "all") return { start: null, end: null };
+    if (preset === "custom") {
+      return {
+        start: customStart || null,
+        end: customEnd || null,
+      };
+    }
+    const days = preset === "30d" ? 30 : preset === "90d" ? 90 : 365;
+    return { start: addDays(todayLocal(), -days), end: todayLocal() };
+  }
+
+  // Re-fetch whenever the resolved range changes. We watch the preset and
+  // the custom inputs directly — the resolver is pure so this is safe.
   useEffect(() => {
     loadData();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset, customStart, customEnd]);
 
   async function loadData() {
-    const { data, error } = await supabase
+    setLoading(true);
+    const { start, end } = computeRange();
+    let query = supabase
       .from("martial_arts_sessions")
-      .select("discipline, duration_min");
+      .select("discipline, duration_min, date");
+    if (start) query = query.gte("date", start);
+    if (end) query = query.lte("date", end);
+
+    const { data, error } = await query;
 
     if (error) {
       console.error("Failed to load pie chart data:", error.message);
@@ -86,14 +129,57 @@ export default function DisciplinePieChart() {
         <h2 className="text-sm font-medium text-zinc-500">
           Discipline breakdown
         </h2>
-        <span className="text-xs text-zinc-500">All time</span>
       </div>
+
+      {/* Preset filter row — horizontally scrollable on tight screens. */}
+      <div className="flex gap-1 mb-3 overflow-x-auto -mx-1 px-1">
+        {PRESETS.map((opt) => {
+          const selected = preset === opt.id;
+          return (
+            <button
+              key={opt.id}
+              onClick={() => setPreset(opt.id)}
+              className={`flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                selected
+                  ? "bg-indigo-600 text-white"
+                  : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700"
+              }`}
+            >
+              {opt.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Custom range inputs — only expand when "Custom" is active. */}
+      {preset === "custom" && (
+        <div className="flex items-center gap-2 mb-3">
+          <input
+            type="date"
+            value={customStart}
+            max={customEnd || todayLocal()}
+            onChange={(e) => setCustomStart(e.target.value)}
+            className="flex-1 min-w-0 text-xs bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1.5"
+          />
+          <span className="text-xs text-zinc-500">→</span>
+          <input
+            type="date"
+            value={customEnd}
+            min={customStart || undefined}
+            max={todayLocal()}
+            onChange={(e) => setCustomEnd(e.target.value)}
+            className="flex-1 min-w-0 text-xs bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1.5"
+          />
+        </div>
+      )}
 
       {loading ? (
         <p className="text-xs text-zinc-500">Loading…</p>
       ) : slices.length === 0 ? (
         <p className="text-xs text-zinc-500">
-          Log a martial arts class to see your breakdown.
+          {preset === "all"
+            ? "Log a martial arts class to see your breakdown."
+            : "No classes logged in this range."}
         </p>
       ) : (
         <div className="flex items-center gap-4">
@@ -132,7 +218,7 @@ export default function DisciplinePieChart() {
             </ResponsiveContainer>
           </div>
 
-          {/* Legend on the right — ordered by volume, with hours + percent. */}
+          {/* Legend on the right — ordered by volume. */}
           <ul className="flex-1 space-y-1.5 text-xs">
             {slices.map((s) => (
               <li key={s.name} className="flex items-center gap-2">
