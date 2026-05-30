@@ -19,6 +19,9 @@ export type SavedWorkout = {
   templateName: string;
   forms: Record<string, ExerciseForm>;
   hiddenExercises: string[]; // Sets aren't JSON-serializable; store as array.
+  // Per-slot exercise swaps (canonical name → chosen alternative). Added
+  // later; old saved blobs may not have it, so callers default to {}.
+  swaps?: Record<string, string>;
   sessionNotes: string;
   sessionMood: 1 | 2 | 3 | 4 | 5 | null;
   // Added later; old saved blobs may not have this field, so callers

@@ -158,7 +158,7 @@ export default function PlannerPage() {
   const [maNotes, setMaNotes] = useState<string>("");
 
   // Lift form fields
-  const [liftTemplate, setLiftTemplate] = useState<string>("Full Body 1");
+  const [liftTemplate, setLiftTemplate] = useState<string>("Day A");
   const [liftIntensity, setLiftIntensity] = useState<Intensity | null>(null);
   const [liftNotes, setLiftNotes] = useState<string>("");
 
@@ -355,7 +355,7 @@ export default function PlannerPage() {
     setMaIntensity(null);
     setMaNotes("");
     // Lift defaults
-    setLiftTemplate("Full Body 1");
+    setLiftTemplate("Day A");
     setLiftIntensity(null);
     setLiftNotes("");
     // Cardio defaults
@@ -924,7 +924,7 @@ export default function PlannerPage() {
                     Template
                   </label>
                   <div className="grid grid-cols-3 gap-1.5">
-                    {["Full Body 1", "Full Body 2", "Custom"].map((t) => (
+                    {["Day A", "Day B", "Day C", "Day 1", "Day 2", "Custom"].map((t) => (
                       <button
                         key={t}
                         onClick={() => setLiftTemplate(t)}

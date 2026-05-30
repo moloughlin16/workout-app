@@ -48,7 +48,8 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
   - "This week's classes" list with **delete** button (optimistic UI + rollback on error)
   - Loading/saving/error UI states
 - [x] **Lift tracker** (`src/app/lift/page.tsx`):
-  - Full Body 1 / Full Body 2 template picker (templates are a `TEMPLATES` constant in this file — edit there to add/remove/rename exercises)
+  - **Two-program picker**: a 3-Day / 2-Day split toggle at the top, then the days for that program (Day A/B/C or Day 1/2). Each `Template` has a `program: "3-day" | "2-day"` field. Templates are a `TEMPLATES` constant in this file — edit there to add/remove/rename exercises.
+  - **Exercise alternatives / swaps** — each `ExerciseDef` has an `alternatives?: string[]`. On the active workout, a "⇄ Swap exercise" control lets you do a substitute when equipment's taken. The swapped name is what gets logged to `lift_sets.exercise_name`, so each variation keeps its own history; swapping re-pulls that exercise's "last time" + pre-fill. Tracked via a `swaps` state map (slot name → chosen) that's also persisted to localStorage.
   - Active workout view: per-exercise cards with inputs for each set (weight × reps)
   - "Last time" hint per exercise via query of most recent `lift_sets` row (shows `BW × N` for bodyweight rows)
   - Add/remove individual sets, **skip an entire exercise** for the current workout via × button (with "Show N skipped" undo)
@@ -96,7 +97,7 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
 **lift_sessions**
 - id (uuid pk)
 - date (date, default current_date)
-- template_name (text, check: 'Full Body 1' / 'Full Body 2' / 'Custom')
+- template_name (text, check: 'Day A' / 'Day B' / 'Day C' / 'Day 1' / 'Day 2' / 'Full Body 1' / 'Full Body 2' / 'Custom' — legacy Full Body names kept so old rows still validate; updated via `scripts/migrate-lift-templates.sql`)
 - notes (text, nullable)
 - rpe (int 1-10, nullable)
 - created_at
@@ -195,41 +196,58 @@ In rough priority order if no preference is stated:
 
 ## User's lifting templates (current state in code)
 
-The actual source of truth is the `TEMPLATES` constant in `src/app/lift/page.tsx`. To change exercises, sets, reps, or notes, edit that array, commit, and push — Vercel auto-deploys.
+The actual source of truth is the `TEMPLATES` constant in `src/app/lift/page.tsx`. To change exercises, sets, reps, notes, or alternatives, edit that array, commit, and push — Vercel auto-deploys. Each template has a `program` ("3-day"/"2-day"), a short `name` (stored in `template_name`), a `subtitle`, and `exercises` (each with optional `note`, `unit`, and `alternatives`).
 
-### Full Body 1 — Strength (controlled, submaximal)
-1. Squat (or Trap Bar DL) — 4 × 3-5
-2. Bench Press — 3 × 4-6
-3. Upright Row — 3 × 6-10
-4. Assisted Pull-ups — 3 × 6-10
-5. Bulgarian Split Squat — 3 × 6-8 ea
-6. Step-ups — 3 × 6-10 ea (note: bodyweight, controlled)
-7. Hamstring Curls — 3 × 8-12
-8. Deadbugs — 3 × 8-12 ea (note: slow, full extension)
-9. Plank — 3 × max **sec** (uses `unit: "sec"`)
-10. Hip Abduction (optional) — 2 × 12-15
+The user runs whichever split fits the week — usually the 3-day, falling back to the 2-day on heavier mat weeks. Coach-prescribed, biased toward lats / upper back / side delts (he gets plenty of pressing from striking), with knee/ankle durability work (tib raises, calves, Copenhagen).
 
-### Full Body 2 — Power (explosive, upper-body bias)
-1. Box Jumps — 4 × 5-8 (note: full recovery)
-2. Kettlebell Swings — 4 × 8-12 (note: hip hinge, explosive)
-3. RDL (or SLDL) — 3 × 5-8
-4. Overhead Press — 3 × 5-8
-5. Row (DB or cable) — 3 × 6-10
-6. Lateral Raises — 3 × 12-15
-7. Face Pulls / Rear Delts — 3 × 12-15
-8. Bicep Curls (optional) — 2 × 10-15
-9. Tricep Pushdowns (optional) — 2 × 10-15
+### 3-Day Split
+**Day A — Lower strength + upper pull/push**
+1. Box Jumps — 3×3 · alts: Broad Jumps, Jump Squats
+2. Back Squat — 4×4-6 · alts: Front Squat, Safety Bar Squat, Goblet Squat
+3. Romanian Deadlift — 3×6-8 · alts: Dumbbell RDL, Barbell Stiff-Leg Deadlift, Single-Leg RDL
+4. Dumbbell Bench Press — 4×6-8 · alts: Bench Press, Weighted Push-ups, Machine Chest Press
+5. Pull-Ups or Chin-Ups — 4×6-8 · alts: Lat Pulldown, Assisted Pull-ups, Single-Arm Cable Pulldown
+6. Hamstring Curl — 3×10-15 · alts: Stability Ball / Nordic regressions / Slider curls
+7. Tibialis Raises — 3×15-20 · alts: Tib Bar, Wall raises, Band dorsiflexion
+
+**Day B — Upper body emphasis + athletic lower**
+1. Med Ball Rotational Throws — 3×5 ea · alts: Landmine Rotations, Cable Rotational Punches
+2. Standing Overhead Press — 4×5-8 · alts: DB Shoulder Press, Landmine Press, Seated DB Press
+3. Chest-Supported Row — 4×8-10 · alts: One-Arm DB Row, Seated Cable Row, Barbell Row
+4. Bulgarian Split Squat — 3×8 ea · alts: Reverse/Walking/Split Squats
+5. Single-Leg RDL — 3×8 ea · alts: B-Stance RDL, Dumbbell RDL, Cable Pull-Through
+6. Face Pulls — 3×12-15 · alts: Band Pull-Aparts, Rear Delt Flyes, Reverse Pec Deck
+7. Lateral Raises — 3×12-20 · alts: Cable / Machine / Lean-Away
+8. Hammer Curls — 3×10-12 · alts: EZ-Bar / DB / Rope Curls
+9. Rope Pushdowns — 3×10-12 · alts: Overhead Cable Ext, Skull Crushers, Bench Dips
+10. Copenhagen Plank — 2×max **sec** (`unit: "sec"`, per side) · alts: Side Plank, Adductor Machine, Ball Squeeze
+
+**Day C — Full-body power + upper back/shoulders**
+1. Kettlebell Swings — 3×12 · alts: DB Swings, Hip Hinge Jumps, Broad Jumps
+2. Trap Bar Deadlift — 4×3-5 · alts: Conventional, Sumo, Heavy RDL
+3. Incline Dumbbell Press — 3×8-10 · alts: Incline Barbell, Push-ups, Machine
+4. Lat Pulldown — 4×8-10 · alts: Pull-Ups, Assisted Pull-ups, Single-Arm Cable
+5. Seated Cable Row — 3×10-12 · alts: Chest-Supported Row, One-Arm DB Row, T-Bar Row
+6. Hip Abduction — 3×12-15 · alts: Mini-Band Walks, Cable, Side-Lying
+7. Farmer Carries — 3 rounds (`targetReps: "rounds"`) · alts: Suitcase / Trap Bar / Heavy DB
+8. Standing Calf Raises — 3×12-15 · alts: Seated, Single-Leg, Leg Press
+9. Lateral Raises — 2×15-20 · alts: Cable / Machine / Lean-Away
+
+### 2-Day Split (heavy-mat-week fallback)
+**Day 1 — Strength emphasis:** Box Jumps 3×3, Back Squat 4×4-6, Romanian Deadlift 3×6-8, Pull-Ups or Chin-Ups 4×6-8, Dumbbell Bench Press 4×6-8, Chest-Supported Row 3×8-10, Hamstring Curl 3×10-15, Lateral Raises 3×12-20, Tibialis Raises 3×15-20.
+**Day 2 — Athletic full body:** Med Ball Rotational Throws 3×5 ea, Trap Bar Deadlift 4×3-5, Bulgarian Split Squat 3×8 ea, Standing Overhead Press 4×5-8, Lat Pulldown 4×8-10, Seated Cable Row 3×10-12, Face Pulls 3×12-15, Hip Abduction 3×12-15, Copenhagen Plank 2×max sec, Farmer Carries 3 rounds, Standing Calf Raises 3×12-15, Lateral Raises 2×15-20.
+(Same exercise names as the 3-day where they overlap, so they share one history.)
+
+### History migration (when this split shipped)
+`scripts/migrate-lift-templates.sql` was run once in Supabase to (a) widen the `template_name` CHECK to the new day names and (b) remap old exercise names to the new ones so history carried over: Squat (or Trap Bar DL)→**Back Squat**, RDL (or SLDL)→**Romanian Deadlift**, Overhead Press→**Standing Overhead Press**, Hamstring Curls→**Hamstring Curl**, Hip Abduction (optional)→**Hip Abduction**, Face Pulls / Rear Delts→**Face Pulls**. Old "Bench Press" + "Assisted Pull-ups" history lives on as swap options. Dropped lifts (Upright Row, Step-ups, Deadbugs, Plank, Bicep Curls, Tricep Pushdowns) keep their rows in the DB but no longer appear in any template.
 
 ### How bodyweight & time-based exercises work
 - **Pure weighted** (Bench, Squat, etc.) — type both fields
-- **Bodyweight that may be loaded** (BSS, Step-ups, Deadbugs, Hip Abduction) — leave **lb** blank, type reps. History shows `BW × N`.
-- **Time-based hold** (Plank) — `ExerciseDef` has `unit: "sec"` set, the second input placeholder shows `sec` instead of `reps`, history shows `BW × 60 sec`. The DB still stores the value in the `reps` integer column.
+- **Bodyweight that may be loaded** (Pull-ups, BSS, Box Jumps, Hip Abduction) — leave **lb** blank, type reps. History shows `BW × N`.
+- **Time-based hold** (Copenhagen Plank) — `ExerciseDef` has `unit: "sec"`, the second input placeholder shows `sec`, history shows `BW × 60 sec`. The DB still stores the value in the `reps` integer column.
+- **Rounds/carries** (Farmer Carries, `targetReps: "rounds"`) — log weight × rounds, or just enter what's meaningful.
 - The save logic accepts `weight_lb: null` and skips fully empty set rows. Sets are only saved if reps OR weight is non-empty.
-
-### Original prescription (for reference if rebuilding)
-The above is the user's actual chosen layout. The original coaching prescription (with rest times) was:
-- Day A: Squat/TBDL 3-4×3-5, Bench 3×4-6, Row 3×6-10, BSS 2-3×6-8 ea, Step-ups 2-3×6-10 ea, Hanging leg raises OR plank 2-3 sets, Hip abduction 1-2×12-15 (optional)
-- Day B: Box jumps OR KB swings 3-5×5-8, RDL/SLDL 3×5-8, OHP 3×5-8, Row 3×6-10, Lateral raises 2-3×12-15, Face pulls 2-3×12-15, Hamstring curls 2-3×8-12, Bicep curls OR tricep pushdowns 1-2 sets (optional)
+- **Alternatives**: when an exercise has `alternatives`, the active workout shows a "⇄ Swap exercise" control. Picking one logs under that name (its own history) and re-pulls its last-time/pre-fill. Reverting = pick the "default" chip.
 
 ## Design principles to follow
 
