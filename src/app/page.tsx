@@ -54,10 +54,13 @@ export default function HomePage() {
   }, []);
 
   async function loadWeekSessions() {
+    const weekStart = startOfWeekLocal();
+    const weekEnd = addDays(weekStart, 7);
     const { data, error } = await supabase
       .from("martial_arts_sessions")
       .select("*")
-      .gte("date", startOfWeekLocal())
+      .gte("date", weekStart)
+      .lt("date", weekEnd)
       .order("created_at", { ascending: false });
     if (error) {
       console.error("Failed to load martial arts sessions:", error.message);
@@ -67,10 +70,13 @@ export default function HomePage() {
   }
 
   async function loadWeekLifts() {
+    const weekStart = startOfWeekLocal();
+    const weekEnd = addDays(weekStart, 7);
     const { data, error } = await supabase
       .from("lift_sessions")
       .select("id, date, template_name, created_at")
-      .gte("date", startOfWeekLocal())
+      .gte("date", weekStart)
+      .lt("date", weekEnd)
       .order("created_at", { ascending: false });
     if (error) {
       console.error("Failed to load lift sessions:", error.message);
