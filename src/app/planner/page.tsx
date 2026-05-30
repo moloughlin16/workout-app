@@ -96,7 +96,22 @@ export default function PlannerPage() {
 
   // Add-entry form state — null when no form is open.
   const [addTarget, setAddTarget] = useState<AddTarget | null>(null);
-  const [addType, setAddType] = useState<"cardio" | "custom">("cardio");
+  // Four supported entry types. Each routes to a different table on save.
+  const [addType, setAddType] = useState<"ma" | "lift" | "cardio" | "custom">(
+    "ma"
+  );
+
+  // MA form fields
+  const [maDiscipline, setMaDiscipline] = useState<string>("MMA");
+  const [maClassName, setMaClassName] = useState<string>("");
+  const [maDuration, setMaDuration] = useState<string>("60");
+  const [maIntensity, setMaIntensity] = useState<Intensity | null>(null);
+  const [maNotes, setMaNotes] = useState<string>("");
+
+  // Lift form fields
+  const [liftTemplate, setLiftTemplate] = useState<string>("Full Body 1");
+  const [liftIntensity, setLiftIntensity] = useState<Intensity | null>(null);
+  const [liftNotes, setLiftNotes] = useState<string>("");
 
   // Cardio form fields
   const [cardioActivity, setCardioActivity] = useState<string>("Walking");
@@ -137,7 +152,7 @@ export default function PlannerPage() {
         .lt("date", weekEnd),
       supabase
         .from("lift_sessions")
-        .select("id, date, template_name")
+        .select("id, date, template_name, intensity")
         .gte("date", weekStart)
         .lt("date", weekEnd),
       supabase
@@ -201,6 +216,7 @@ export default function PlannerPage() {
       id: string;
       date: string;
       template_name: string;
+      intensity: Intensity | null;
     }>) {
       out.push({
         id: `lift-${r.id}`,
@@ -210,7 +226,7 @@ export default function PlannerPage() {
         title: r.template_name,
         subtitle: "Lift session",
         emoji: "🏋️",
-        intensity: null,
+        intensity: r.intensity,
       });
     }
 
@@ -265,11 +281,23 @@ export default function PlannerPage() {
 
   function openAddForm(target: AddTarget) {
     setAddTarget(target);
-    setAddType("cardio");
+    setAddType("ma");
+    // MA defaults
+    setMaDiscipline("MMA");
+    setMaClassName("");
+    setMaDuration("60");
+    setMaIntensity(null);
+    setMaNotes("");
+    // Lift defaults
+    setLiftTemplate("Full Body 1");
+    setLiftIntensity(null);
+    setLiftNotes("");
+    // Cardio defaults
     setCardioActivity("Walking");
     setCardioDuration("30");
     setCardioIntensity("low");
     setCardioNotes("");
+    // Custom defaults
     setCustomTitle("");
     setCustomIntensity(null);
     setCustomNotes("");
@@ -284,7 +312,76 @@ export default function PlannerPage() {
     setSubmitting(true);
     setErrorMsg(null);
 
-    if (addType === "cardio") {
+    if (addType === "ma") {
+      // MA form. Routes to planned_sessions for future dates, or directly
+      // to martial_arts_sessions for today/past — matches the Schedule
+      // tab's "Plan vs I went" semantics. Discipline is required; the
+      // class_name field is optional and falls back to the discipline.
+      const dur = parseInt(maDuration, 10);
+      if (!Number.isFinite(dur) || dur <= 0) {
+        setErrorMsg("Duration must be a positive number.");
+        setSubmitting(false);
+        return;
+      }
+      const startTime = defaultStartTimeForSlot(addTarget.dayPart);
+      const className = maClassName.trim() || maDiscipline;
+      const isFuture = addTarget.date > todayLocal();
+      if (isFuture) {
+        // Compute end_time = start_time + dur minutes for planned_sessions.
+        // Hours/minutes math is small enough to inline.
+        const [sh, sm] = startTime.split(":").map(Number);
+        const totalMin = sh * 60 + sm + dur;
+        const eh = Math.floor(totalMin / 60) % 24;
+        const em = totalMin % 60;
+        const endTime = `${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}:00`;
+        const { error } = await supabase.from("planned_sessions").insert({
+          date: addTarget.date,
+          start_time: startTime,
+          end_time: endTime,
+          class_name: className,
+          discipline: maDiscipline,
+          intensity: maIntensity,
+        });
+        if (error) {
+          console.error("Add planned MA failed:", error.message);
+          setErrorMsg(`Couldn't save plan: ${error.message}`);
+          setSubmitting(false);
+          return;
+        }
+      } else {
+        const { error } = await supabase.from("martial_arts_sessions").insert({
+          date: addTarget.date,
+          discipline: maDiscipline,
+          duration_min: dur,
+          class_name: className,
+          start_time: startTime,
+          intensity: maIntensity,
+          notes: maNotes.trim() || null,
+        });
+        if (error) {
+          console.error("Add MA log failed:", error.message);
+          setErrorMsg(`Couldn't save MA session: ${error.message}`);
+          setSubmitting(false);
+          return;
+        }
+      }
+    } else if (addType === "lift") {
+      // Lift form. Inserts a lift_sessions row with no sets — the user
+      // opens /lift and edits when they actually train. Works for past
+      // (you can backfill) and future (placeholder) dates alike.
+      const { error } = await supabase.from("lift_sessions").insert({
+        date: addTarget.date,
+        template_name: liftTemplate,
+        intensity: liftIntensity,
+        notes: liftNotes.trim() || null,
+      });
+      if (error) {
+        console.error("Add lift failed:", error.message);
+        setErrorMsg(`Couldn't save lift: ${error.message}`);
+        setSubmitting(false);
+        return;
+      }
+    } else if (addType === "cardio") {
       const dur = parseInt(cardioDuration, 10);
       if (!Number.isFinite(dur) || dur <= 0) {
         setErrorMsg("Duration must be a positive number.");
@@ -309,6 +406,7 @@ export default function PlannerPage() {
         return;
       }
     } else {
+      // Custom
       const title = customTitle.trim();
       if (!title) {
         setErrorMsg("Give the entry a title.");
@@ -532,31 +630,138 @@ export default function PlannerPage() {
               </button>
             </div>
 
-            {/* Type toggle */}
-            <div className="flex gap-1 mb-4 p-1 rounded-lg bg-zinc-100 dark:bg-zinc-800">
-              <button
-                onClick={() => setAddType("cardio")}
-                className={`flex-1 py-2 rounded-md text-xs font-semibold ${
-                  addType === "cardio"
-                    ? "bg-white dark:bg-zinc-900 shadow"
-                    : "text-zinc-500"
-                }`}
-              >
-                🚶 Cardio
-              </button>
-              <button
-                onClick={() => setAddType("custom")}
-                className={`flex-1 py-2 rounded-md text-xs font-semibold ${
-                  addType === "custom"
-                    ? "bg-white dark:bg-zinc-900 shadow"
-                    : "text-zinc-500"
-                }`}
-              >
-                📝 Custom
-              </button>
+            {/* Type toggle — 4 options. Compact pill row. */}
+            <div className="grid grid-cols-4 gap-1 mb-4 p-1 rounded-lg bg-zinc-100 dark:bg-zinc-800">
+              {(
+                [
+                  { id: "ma", label: "🥋 MA" },
+                  { id: "lift", label: "🏋️ Lift" },
+                  { id: "cardio", label: "🚶 Cardio" },
+                  { id: "custom", label: "📝 Custom" },
+                ] as const
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => setAddType(opt.id)}
+                  className={`py-2 rounded-md text-[11px] font-semibold ${
+                    addType === opt.id
+                      ? "bg-white dark:bg-zinc-900 shadow"
+                      : "text-zinc-500"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
             </div>
 
-            {addType === "cardio" ? (
+            {addType === "ma" && (
+              <div className="space-y-3">
+                {/* Discipline pills */}
+                <div>
+                  <label className="text-xs font-medium text-zinc-500 mb-1.5 block">
+                    Discipline
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {(
+                      [
+                        { key: "MMA", label: "🥋 MMA" },
+                        { key: "Kickboxing", label: "🥊 Kickboxing" },
+                        { key: "Grappling", label: "🤼 Grappling" },
+                        { key: "Sparring", label: "⚡ Sparring" },
+                      ] as const
+                    ).map((d) => (
+                      <button
+                        key={d.key}
+                        onClick={() => setMaDiscipline(d.key)}
+                        className={`py-2 rounded-lg text-xs font-semibold border-2 ${
+                          maDiscipline === d.key
+                            ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300"
+                            : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400"
+                        }`}
+                      >
+                        {d.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <input
+                  type="text"
+                  value={maClassName}
+                  onChange={(e) => setMaClassName(e.target.value)}
+                  placeholder="Class name (optional, e.g. NoGi BJJ)"
+                  className="w-full text-sm px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                />
+                <div className="flex items-center gap-2">
+                  <label className="text-xs font-medium text-zinc-500">
+                    Duration
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    value={maDuration}
+                    onChange={(e) => setMaDuration(e.target.value)}
+                    className="w-16 text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                  />
+                  <span className="text-xs text-zinc-500">min</span>
+                  {addTarget && addTarget.date > todayLocal() && (
+                    <span className="ml-auto text-[10px] text-amber-600 dark:text-amber-400 font-medium">
+                      Will save as planned
+                    </span>
+                  )}
+                </div>
+                <IntensityPicker value={maIntensity} onChange={setMaIntensity} />
+                <textarea
+                  value={maNotes}
+                  onChange={(e) => setMaNotes(e.target.value)}
+                  placeholder="Notes (optional). Use #tags to group topics."
+                  rows={2}
+                  className="w-full text-sm p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                />
+              </div>
+            )}
+
+            {addType === "lift" && (
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs font-medium text-zinc-500 mb-1.5 block">
+                    Template
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {["Full Body 1", "Full Body 2", "Custom"].map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setLiftTemplate(t)}
+                        className={`py-2 rounded-lg text-xs font-semibold border-2 ${
+                          liftTemplate === t
+                            ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300"
+                            : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400"
+                        }`}
+                      >
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <IntensityPicker
+                  value={liftIntensity}
+                  onChange={setLiftIntensity}
+                />
+                <textarea
+                  value={liftNotes}
+                  onChange={(e) => setLiftNotes(e.target.value)}
+                  placeholder="Notes (optional)"
+                  rows={2}
+                  className="w-full text-sm p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                />
+                <p className="text-[10px] text-zinc-500">
+                  Creates an empty session. Tap it in the planner or visit Lift
+                  to enter sets when you train.
+                </p>
+              </div>
+            )}
+
+            {addType === "cardio" && (
               <div className="space-y-3">
                 {/* Activity quick-picks + custom input */}
                 <div>
@@ -612,7 +817,9 @@ export default function PlannerPage() {
                   className="w-full text-sm p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
                 />
               </div>
-            ) : (
+            )}
+
+            {addType === "custom" && (
               <div className="space-y-3">
                 <input
                   type="text"

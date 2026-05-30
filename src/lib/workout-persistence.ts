@@ -21,6 +21,9 @@ export type SavedWorkout = {
   hiddenExercises: string[]; // Sets aren't JSON-serializable; store as array.
   sessionNotes: string;
   sessionMood: 1 | 2 | 3 | 4 | 5 | null;
+  // Added later; old saved blobs may not have this field, so callers
+  // should default to null when restoring (?? null).
+  sessionIntensity?: "low" | "medium" | "high" | null;
   logDate: string;
   savedAt: number; // epoch ms
 };

@@ -6,6 +6,11 @@ import { todayLocal, relativeLabel } from "@/lib/date";
 import ExerciseProgressChart from "@/components/ExerciseProgressChart";
 import RestTimer from "@/components/RestTimer";
 import MoodPicker, { moodEmoji } from "@/components/MoodPicker";
+import IntensityPicker, {
+  IntensityBadge,
+  intensityCardClass,
+  type Intensity,
+} from "@/components/IntensityPicker";
 import {
   clearWorkout,
   loadWorkout,
@@ -112,6 +117,7 @@ type PastSession = {
   created_at: string;
   notes: string | null;
   mood: number | null;
+  intensity: Intensity | null;
   set_count?: number;
 };
 
@@ -186,10 +192,16 @@ export default function LiftPage() {
   const [sessionMood, setSessionMood] = useState<1 | 2 | 3 | 4 | 5 | null>(
     null
   );
+  // Intensity rating for the current workout (low/medium/high).
+  // Same color semantics as the MA intensity picker.
+  const [sessionIntensity, setSessionIntensity] = useState<Intensity | null>(
+    null
+  );
 
   // Parallel state for editing a past session.
   const [editNotes, setEditNotes] = useState<string>("");
   const [editMood, setEditMood] = useState<1 | 2 | 3 | 4 | 5 | null>(null);
+  const [editIntensity, setEditIntensity] = useState<Intensity | null>(null);
 
   // The date we're logging FOR. Defaults to today; user can change it
   // to back-date a workout they did earlier but forgot to log.
@@ -212,6 +224,7 @@ export default function LiftPage() {
           setHiddenExercises(new Set(saved.hiddenExercises));
           setSessionNotes(saved.sessionNotes);
           setSessionMood(saved.sessionMood);
+          setSessionIntensity(saved.sessionIntensity ?? null);
           setLogDate(saved.logDate);
           // Re-fetch last-time hints so the green "Last:" lines appear.
           fetchLastTimes(template.exercises.map((e) => e.name));
@@ -233,6 +246,7 @@ export default function LiftPage() {
       hiddenExercises: Array.from(hiddenExercises),
       sessionNotes,
       sessionMood,
+      sessionIntensity,
       logDate,
     });
   }, [
@@ -241,6 +255,7 @@ export default function LiftPage() {
     hiddenExercises,
     sessionNotes,
     sessionMood,
+    sessionIntensity,
     logDate,
   ]);
 
@@ -289,7 +304,7 @@ export default function LiftPage() {
     // row for each session — much faster than fetching every set row.
     const { data, error } = await supabase
       .from("lift_sessions")
-      .select("id, date, template_name, notes, mood, created_at, lift_sets(count)")
+      .select("id, date, template_name, notes, mood, intensity, created_at, lift_sets(count)")
       .order("date", { ascending: false })
       .order("created_at", { ascending: false })
       .limit(10);
@@ -309,6 +324,7 @@ export default function LiftPage() {
       template_name: r.template_name,
       notes: r.notes,
       mood: r.mood,
+      intensity: r.intensity,
       created_at: r.created_at,
       set_count: r.lift_sets?.[0]?.count ?? 0,
     }));
@@ -376,6 +392,7 @@ export default function LiftPage() {
     // Fresh notes + mood.
     setSessionNotes("");
     setSessionMood(null);
+    setSessionIntensity(null);
 
     // First — drop empty placeholder rows so the form renders immediately.
     // The pre-filled values arrive once the DB queries return below.
@@ -690,6 +707,7 @@ export default function LiftPage() {
         date: logDate,
         notes: trimmedNotes.length > 0 ? trimmedNotes : null,
         mood: sessionMood,
+        intensity: sessionIntensity,
       })
       .select()
       .single();
@@ -727,6 +745,7 @@ export default function LiftPage() {
     setForms({});
     setSessionNotes("");
     setSessionMood(null);
+    setSessionIntensity(null);
     // Saved successfully — the in-progress copy in localStorage is no
     // longer needed, and leaving it would re-resume on next visit.
     clearWorkout();
@@ -798,6 +817,7 @@ export default function LiftPage() {
         ? ((session.mood as 1 | 2 | 3 | 4 | 5) ?? null)
         : null
     );
+    setEditIntensity(session.intensity ?? null);
     setEditingSession(session);
   }
 
@@ -806,6 +826,7 @@ export default function LiftPage() {
     setEditGroups([]);
     setEditNotes("");
     setEditMood(null);
+    setEditIntensity(null);
     setErrorMsg(null);
   }
 
@@ -883,14 +904,15 @@ export default function LiftPage() {
       });
     }
 
-    // Step 0: push the edited notes + mood back to lift_sessions. Treat
-    // empty input as NULL so the coach summary / AI prompt skip it cleanly.
+    // Step 0: push the edited notes + mood + intensity back to lift_sessions.
+    // Treat empty input as NULL so the coach summary / AI prompt skip it cleanly.
     const trimmedNotes = editNotes.trim();
     const { error: notesError } = await supabase
       .from("lift_sessions")
       .update({
         notes: trimmedNotes.length > 0 ? trimmedNotes : null,
         mood: editMood,
+        intensity: editIntensity,
       })
       .eq("id", editingSession.id);
     if (notesError) {
@@ -931,6 +953,7 @@ export default function LiftPage() {
     setEditGroups([]);
     setEditNotes("");
     setEditMood(null);
+    setEditIntensity(null);
     // Refresh the picker list so counts and most-recent order are correct.
     loadPastSessions();
     loadExerciseHistory();
@@ -997,8 +1020,10 @@ export default function LiftPage() {
           </button>
         </header>
 
-        {/* Session mood + notes editor — always visible, even when no sets exist. */}
+        {/* Session intensity + mood + notes editor — always visible, even
+            when no sets exist. */}
         <section className="mb-4 p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4">
+          <IntensityPicker value={editIntensity} onChange={setEditIntensity} />
           <MoodPicker value={editMood} onChange={setEditMood} />
           <div>
             <label
@@ -1222,10 +1247,16 @@ export default function LiftPage() {
             {pastSessions.map((s) => {
               const hasNote = (s.notes ?? "").trim().length > 0;
               const mood = moodEmoji(s.mood);
+              // Tint the row by intensity (low=emerald, med=amber, high=red)
+              // — same treatment as the MA list rows.
+              const tint = intensityCardClass(s.intensity);
+              const cardClass = tint
+                ? tint
+                : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800";
               return (
                 <li
                   key={s.id}
-                  className="flex items-start gap-3 p-3 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
+                  className={`flex items-start gap-3 p-3 rounded-xl border ${cardClass}`}
                 >
                   <button
                     onClick={() => startEditing(s)}
@@ -1237,9 +1268,12 @@ export default function LiftPage() {
                       <span className="truncate">{s.template_name}</span>
                       {mood && <span className="text-base ml-auto pr-1">{mood}</span>}
                     </div>
-                    <div className="text-xs text-zinc-500">
-                      {relativeLabel(s.date)} · {s.set_count ?? 0} sets
-                      {hasNote && " · 📝"}
+                    <div className="text-xs text-zinc-500 flex items-center gap-1.5 flex-wrap">
+                      <span>
+                        {relativeLabel(s.date)} · {s.set_count ?? 0} sets
+                        {hasNote && " · 📝"}
+                      </span>
+                      <IntensityBadge value={s.intensity} />
                     </div>
                     {hasNote && (
                       <div className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 line-clamp-2 whitespace-pre-wrap">
@@ -1473,10 +1507,14 @@ export default function LiftPage() {
         </button>
       )}
 
-      {/* Mood + notes — jot down how you were feeling while it's fresh.
-          The emoji scale is a quick one-tap rating; the textarea is for
-          anything more specific you want to remember. */}
+      {/* Intensity + mood + notes — jot down how you were feeling while
+          it's fresh. Intensity is your perceived effort (low/med/high),
+          mood is your overall vibe, notes is free text. */}
       <section className="mt-6 p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 space-y-4">
+        <IntensityPicker
+          value={sessionIntensity}
+          onChange={setSessionIntensity}
+        />
         <MoodPicker value={sessionMood} onChange={setSessionMood} />
         <div>
           <label
