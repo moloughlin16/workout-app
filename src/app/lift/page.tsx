@@ -31,12 +31,36 @@ type ExerciseDef = {
   // holds like plank — the placeholder + history label change accordingly.
   // The DB column is still `reps` (an integer); we just relabel it in the UI.
   unit?: "reps" | "sec";
+  // Swap-in options when equipment isn't available. Each alternative builds
+  // its OWN history (history is keyed by exercise name), so swapping to
+  // "Lat Pulldown" shows your lat-pulldown numbers, not your pull-up numbers.
+  // The alternative name is what gets logged when you pick it.
+  alternatives?: string[];
 };
 
+// Which lifting program a day belongs to. The picker shows a 3-Day / 2-Day
+// toggle and lists only the days for the selected program.
+type Program = "3-day" | "2-day";
+
 type Template = {
-  name: "Full Body 1" | "Full Body 2";
+  program: Program;
+  // Short label stored in lift_sessions.template_name and shown in the
+  // Recent-sessions list (e.g. "Day A"). Must be unique across all templates.
+  name: string;
   subtitle: string;
   exercises: ExerciseDef[];
+};
+
+// Human-friendly blurb for each program, shown under the picker toggle.
+const PROGRAM_INFO: Record<Program, { label: string; blurb: string }> = {
+  "3-day": {
+    label: "3-Day Split",
+    blurb: "More strength + hypertrophy volume across three sessions.",
+  },
+  "2-day": {
+    label: "2-Day Split",
+    blurb: "Two quality sessions — maximal recovery for mat time.",
+  },
 };
 
 // Curated list of exercises shown in the "Progress" section on the lift
@@ -44,44 +68,105 @@ type Template = {
 // If you ever want to expose progress for a different exercise, just add
 // its name (must match the TEMPLATES entry exactly, including parens).
 const TRACKED_FOR_PROGRESS = new Set([
-  "Squat (or Trap Bar DL)",
-  "Bench Press",
-  "Overhead Press",
-  "Assisted Pull-ups",
-  "RDL (or SLDL)",
-  "Upright Row",
+  "Back Squat",
+  "Trap Bar Deadlift",
+  "Romanian Deadlift",
+  "Dumbbell Bench Press",
+  "Standing Overhead Press",
+  "Pull-Ups or Chin-Ups",
+  "Lat Pulldown",
 ]);
 
+// Shared alternative lists reused across days so they stay in sync.
+const ALT_LATERAL_RAISES = [
+  "Cable Lateral Raises",
+  "Machine Lateral Raise",
+  "Lean-Away DB Lateral Raise",
+];
+
 const TEMPLATES: Template[] = [
+  // ---------------- 3-DAY SPLIT ----------------
   {
-    name: "Full Body 1",
-    subtitle: "Strength — controlled, submaximal",
+    program: "3-day",
+    name: "Day A",
+    subtitle: "Lower strength + upper pull/push",
     exercises: [
-      { name: "Squat (or Trap Bar DL)", targetSets: 4, targetReps: "3-5" },
-      { name: "Bench Press", targetSets: 3, targetReps: "4-6" },
-      { name: "Upright Row", targetSets: 3, targetReps: "6-10" },
-      { name: "Assisted Pull-ups", targetSets: 3, targetReps: "6-10" },
-      { name: "Bulgarian Split Squat", targetSets: 3, targetReps: "6-8 ea" },
-      { name: "Step-ups", targetSets: 3, targetReps: "6-10 ea", note: "bodyweight, controlled" },
-      { name: "Hamstring Curls", targetSets: 3, targetReps: "8-12" },
-      { name: "Deadbugs", targetSets: 3, targetReps: "8-12 ea", note: "slow, full extension" },
-      { name: "Plank", targetSets: 3, targetReps: "max", unit: "sec" },
-      { name: "Hip Abduction (optional)", targetSets: 2, targetReps: "12-15" },
+      { name: "Box Jumps", targetSets: 3, targetReps: "3", note: "explosive, full recovery", alternatives: ["Broad Jumps", "Jump Squats"] },
+      { name: "Back Squat", targetSets: 4, targetReps: "4-6", alternatives: ["Front Squat", "Safety Bar Squat", "Goblet Squat"] },
+      { name: "Romanian Deadlift", targetSets: 3, targetReps: "6-8", alternatives: ["Dumbbell RDL", "Barbell Stiff-Leg Deadlift", "Single-Leg RDL"] },
+      { name: "Dumbbell Bench Press", targetSets: 4, targetReps: "6-8", alternatives: ["Bench Press", "Weighted Push-ups", "Machine Chest Press"] },
+      { name: "Pull-Ups or Chin-Ups", targetSets: 4, targetReps: "6-8", alternatives: ["Lat Pulldown", "Assisted Pull-ups", "Single-Arm Cable Pulldown"] },
+      { name: "Hamstring Curl", targetSets: 3, targetReps: "10-15", alternatives: ["Stability Ball Hamstring Curls", "Nordic Curl Regressions", "Slider Hamstring Curls"] },
+      { name: "Tibialis Raises", targetSets: 3, targetReps: "15-20", alternatives: ["Tib Bar", "Wall Tibialis Raises", "Band Dorsiflexion"] },
     ],
   },
   {
-    name: "Full Body 2",
-    subtitle: "Power — explosive, upper-body bias",
+    program: "3-day",
+    name: "Day B",
+    subtitle: "Upper body emphasis + athletic lower",
     exercises: [
-      { name: "Box Jumps", targetSets: 4, targetReps: "5-8", note: "full recovery" },
-      { name: "Kettlebell Swings", targetSets: 4, targetReps: "8-12", note: "hip hinge, explosive" },
-      { name: "RDL (or SLDL)", targetSets: 3, targetReps: "5-8" },
-      { name: "Overhead Press", targetSets: 3, targetReps: "5-8" },
-      { name: "Row (DB or cable)", targetSets: 3, targetReps: "6-10" },
-      { name: "Lateral Raises", targetSets: 3, targetReps: "12-15" },
-      { name: "Face Pulls / Rear Delts", targetSets: 3, targetReps: "12-15" },
-      { name: "Bicep Curls (optional)", targetSets: 2, targetReps: "10-15" },
-      { name: "Tricep Pushdowns (optional)", targetSets: 2, targetReps: "10-15" },
+      { name: "Med Ball Rotational Throws", targetSets: 3, targetReps: "5 ea", note: "explosive, per side", alternatives: ["Landmine Rotations", "Cable Rotational Punches"] },
+      { name: "Standing Overhead Press", targetSets: 4, targetReps: "5-8", alternatives: ["Dumbbell Shoulder Press", "Landmine Press", "Seated DB Press"] },
+      { name: "Chest-Supported Row", targetSets: 4, targetReps: "8-10", alternatives: ["One-Arm DB Row", "Seated Cable Row", "Barbell Row"] },
+      { name: "Bulgarian Split Squat", targetSets: 3, targetReps: "8 ea", alternatives: ["Reverse Lunges", "Walking Lunges", "Split Squats"] },
+      { name: "Single-Leg RDL", targetSets: 3, targetReps: "8 ea", alternatives: ["B-Stance RDL", "Dumbbell RDL", "Cable Pull-Through"] },
+      { name: "Face Pulls", targetSets: 3, targetReps: "12-15", alternatives: ["Band Pull-Aparts", "Rear Delt Flyes", "Reverse Pec Deck"] },
+      { name: "Lateral Raises", targetSets: 3, targetReps: "12-20", alternatives: ALT_LATERAL_RAISES },
+      { name: "Hammer Curls", targetSets: 3, targetReps: "10-12", alternatives: ["EZ-Bar Curls", "DB Curls", "Rope Curls"] },
+      { name: "Rope Pushdowns", targetSets: 3, targetReps: "10-12", alternatives: ["Overhead Cable Extensions", "Skull Crushers", "Bench Dips"] },
+      { name: "Copenhagen Plank", targetSets: 2, targetReps: "max", unit: "sec", note: "hold, per side", alternatives: ["Side Plank w/ Top-Leg Raise", "Adductor Machine", "Med Ball Squeeze Holds"] },
+    ],
+  },
+  {
+    program: "3-day",
+    name: "Day C",
+    subtitle: "Full-body power + upper back/shoulders",
+    exercises: [
+      { name: "Kettlebell Swings", targetSets: 3, targetReps: "12", note: "hip hinge, explosive", alternatives: ["Dumbbell Swings", "Hip Hinge Jumps", "Broad Jumps"] },
+      { name: "Trap Bar Deadlift", targetSets: 4, targetReps: "3-5", alternatives: ["Conventional Deadlift", "Sumo Deadlift", "Heavy RDL"] },
+      { name: "Incline Dumbbell Press", targetSets: 3, targetReps: "8-10", alternatives: ["Incline Barbell Press", "Push-ups", "Machine Incline Press"] },
+      { name: "Lat Pulldown", targetSets: 4, targetReps: "8-10", alternatives: ["Pull-Ups or Chin-Ups", "Assisted Pull-ups", "Single-Arm Cable Pulldown"] },
+      { name: "Seated Cable Row", targetSets: 3, targetReps: "10-12", alternatives: ["Chest-Supported Row", "One-Arm DB Row", "T-Bar Row"] },
+      { name: "Hip Abduction", targetSets: 3, targetReps: "12-15", alternatives: ["Mini-Band Lateral Walks", "Cable Hip Abductions", "Side-Lying Leg Raises"] },
+      { name: "Farmer Carries", targetSets: 3, targetReps: "rounds", note: "by distance or time", alternatives: ["Suitcase Carries", "Trap Bar Carries", "Heavy DB Holds"] },
+      { name: "Standing Calf Raises", targetSets: 3, targetReps: "12-15", alternatives: ["Seated Calf Raises", "Single-Leg Calf Raises", "Leg Press Calf Raises"] },
+      { name: "Lateral Raises", targetSets: 2, targetReps: "15-20", alternatives: ALT_LATERAL_RAISES },
+    ],
+  },
+  // ---------------- 2-DAY SPLIT ----------------
+  {
+    program: "2-day",
+    name: "Day 1",
+    subtitle: "Strength emphasis — your heavier day",
+    exercises: [
+      { name: "Box Jumps", targetSets: 3, targetReps: "3", note: "explosive, full recovery", alternatives: ["Broad Jumps", "Jump Squats"] },
+      { name: "Back Squat", targetSets: 4, targetReps: "4-6", alternatives: ["Front Squat", "Safety Bar Squat", "Goblet Squat"] },
+      { name: "Romanian Deadlift", targetSets: 3, targetReps: "6-8", alternatives: ["Dumbbell RDL", "Single-Leg RDL", "Barbell Stiff-Leg Deadlift"] },
+      { name: "Pull-Ups or Chin-Ups", targetSets: 4, targetReps: "6-8", alternatives: ["Lat Pulldown", "Assisted Pull-ups", "Single-Arm Cable Pulldown"] },
+      { name: "Dumbbell Bench Press", targetSets: 4, targetReps: "6-8", alternatives: ["Bench Press", "Weighted Push-ups", "Machine Chest Press"] },
+      { name: "Chest-Supported Row", targetSets: 3, targetReps: "8-10", alternatives: ["Seated Cable Row", "One-Arm DB Row", "Barbell Row"] },
+      { name: "Hamstring Curl", targetSets: 3, targetReps: "10-15", alternatives: ["Nordic Curl Regressions", "Stability Ball Hamstring Curls", "Slider Hamstring Curls"] },
+      { name: "Lateral Raises", targetSets: 3, targetReps: "12-20", alternatives: ALT_LATERAL_RAISES },
+      { name: "Tibialis Raises", targetSets: 3, targetReps: "15-20", alternatives: ["Tib Bar", "Wall Tibialis Raises", "Band Dorsiflexion"] },
+    ],
+  },
+  {
+    program: "2-day",
+    name: "Day 2",
+    subtitle: "Athletic full body + upper back/shoulders",
+    exercises: [
+      { name: "Med Ball Rotational Throws", targetSets: 3, targetReps: "5 ea", note: "explosive, per side", alternatives: ["Landmine Rotations", "Cable Rotational Punches"] },
+      { name: "Trap Bar Deadlift", targetSets: 4, targetReps: "3-5", alternatives: ["Conventional Deadlift", "Sumo Deadlift", "Heavy RDL"] },
+      { name: "Bulgarian Split Squat", targetSets: 3, targetReps: "8 ea", alternatives: ["Reverse Lunges", "Walking Lunges", "Split Squats"] },
+      { name: "Standing Overhead Press", targetSets: 4, targetReps: "5-8", alternatives: ["Dumbbell Shoulder Press", "Landmine Press", "Seated DB Press"] },
+      { name: "Lat Pulldown", targetSets: 4, targetReps: "8-10", alternatives: ["Pull-Ups or Chin-Ups", "Assisted Pull-ups", "Single-Arm Cable Pulldown"] },
+      { name: "Seated Cable Row", targetSets: 3, targetReps: "10-12", alternatives: ["Chest-Supported Row", "One-Arm DB Row", "T-Bar Row"] },
+      { name: "Face Pulls", targetSets: 3, targetReps: "12-15", alternatives: ["Band Pull-Aparts", "Rear Delt Flyes", "Reverse Pec Deck"] },
+      { name: "Hip Abduction", targetSets: 3, targetReps: "12-15", alternatives: ["Band Lateral Walks", "Cable Abductions", "Side-Lying Leg Raises"] },
+      { name: "Copenhagen Plank", targetSets: 2, targetReps: "max", unit: "sec", note: "hold, per side", alternatives: ["Side Plank w/ Top-Leg Raise", "Adductor Machine", "Med Ball Squeeze Holds"] },
+      { name: "Farmer Carries", targetSets: 3, targetReps: "rounds", note: "by distance or time", alternatives: ["Suitcase Carries", "Trap Bar Carries", "Heavy DB Holds"] },
+      { name: "Standing Calf Raises", targetSets: 3, targetReps: "12-15", alternatives: ["Seated Calf Raises", "Single-Leg Calf Raises", "Leg Press Calf Raises"] },
+      { name: "Lateral Raises", targetSets: 2, targetReps: "15-20", alternatives: ALT_LATERAL_RAISES },
     ],
   },
 ];
@@ -184,6 +269,18 @@ export default function LiftPage() {
   // Resets every time a new template is started.
   const [hiddenExercises, setHiddenExercises] = useState<Set<string>>(new Set());
 
+  // Per-workout exercise swaps. Keyed by the template slot's canonical name
+  // (e.g. "Pull-Ups or Chin-Ups"), value = the chosen exercise to actually do
+  // and log (e.g. "Lat Pulldown"). Absent = doing the primary. Resets each
+  // workout. The chosen name is what gets written to lift_sets.exercise_name,
+  // so each variation keeps its own clean history.
+  const [swaps, setSwaps] = useState<Record<string, string>>({});
+  // Which exercise card currently has its swap panel open (slot name), or null.
+  const [openSwap, setOpenSwap] = useState<string | null>(null);
+
+  // Which program's days are shown on the picker (3-day vs 2-day toggle).
+  const [selectedProgram, setSelectedProgram] = useState<Program>("3-day");
+
   // Free-text notes for the current workout — "how I was feeling", technique
   // thoughts, bad sleep, whatever. Saved to lift_sessions.notes on finish.
   const [sessionNotes, setSessionNotes] = useState<string>("");
@@ -219,15 +316,21 @@ export default function LiftPage() {
       if (saved) {
         const template = TEMPLATES.find((t) => t.name === saved.templateName);
         if (template) {
+          const restoredSwaps = saved.swaps ?? {};
           setActiveTemplate(template);
           setForms(saved.forms);
           setHiddenExercises(new Set(saved.hiddenExercises));
+          setSwaps(restoredSwaps);
+          setSelectedProgram(template.program);
           setSessionNotes(saved.sessionNotes);
           setSessionMood(saved.sessionMood);
           setSessionIntensity(saved.sessionIntensity ?? null);
           setLogDate(saved.logDate);
-          // Re-fetch last-time hints so the green "Last:" lines appear.
-          fetchLastTimes(template.exercises.map((e) => e.name));
+          // Re-fetch last-time hints so the green "Last:" lines appear. Use the
+          // effective (possibly swapped) name for each slot.
+          fetchLastTimes(
+            template.exercises.map((e) => restoredSwaps[e.name] ?? e.name)
+          );
         }
       }
     } catch (err) {
@@ -244,6 +347,7 @@ export default function LiftPage() {
       templateName: activeTemplate.name,
       forms,
       hiddenExercises: Array.from(hiddenExercises),
+      swaps,
       sessionNotes,
       sessionMood,
       sessionIntensity,
@@ -253,6 +357,7 @@ export default function LiftPage() {
     activeTemplate,
     forms,
     hiddenExercises,
+    swaps,
     sessionNotes,
     sessionMood,
     sessionIntensity,
@@ -389,6 +494,9 @@ export default function LiftPage() {
     setNewPRs([]);
     // Start with no exercises hidden — fresh workout, full template visible.
     setHiddenExercises(new Set());
+    // Fresh swaps — every exercise back to its primary.
+    setSwaps({});
+    setOpenSwap(null);
     // Fresh notes + mood.
     setSessionNotes("");
     setSessionMood(null);
@@ -469,6 +577,64 @@ export default function LiftPage() {
       })
     );
     setLastTimes(results);
+  }
+
+  // The exercise actually being done for a given template slot — the chosen
+  // swap if there is one, otherwise the slot's primary exercise.
+  function effectiveName(slot: string): string {
+    return swaps[slot] ?? slot;
+  }
+
+  // Fetch + merge the "Last:" hint for a single exercise (used after a swap so
+  // we don't clobber the other slots' hints the way fetchLastTimes would).
+  async function loadLastTimeFor(name: string) {
+    const { data } = await supabase
+      .from("lift_sets")
+      .select("weight_lb, reps, created_at")
+      .eq("exercise_name", name)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    setLastTimes((prev) => ({
+      ...prev,
+      [name]:
+        data && data.length > 0
+          ? { weight_lb: data[0].weight_lb, reps: data[0].reps, date: data[0].created_at }
+          : null,
+    }));
+  }
+
+  // Swap a slot to a chosen exercise (or back to the primary when chosen ===
+  // slot). Re-pulls that exercise's last-time hint and pre-fills the slot's
+  // set rows from its own most recent session, so swapping to "Lat Pulldown"
+  // shows your lat-pulldown numbers rather than your pull-up numbers.
+  async function swapExercise(slot: string, chosen: string) {
+    const ex = activeTemplate?.exercises.find((e) => e.name === slot);
+    setOpenSwap(null);
+    setSwaps((prev) => {
+      const next = { ...prev };
+      if (chosen === slot) delete next[slot];
+      else next[slot] = chosen;
+      return next;
+    });
+    if (!ex) return;
+
+    const [lastSession] = await Promise.all([
+      fetchLastSessionSets([chosen]),
+      loadLastTimeFor(chosen),
+    ]);
+    const last = lastSession[chosen] ?? [];
+    setForms((prev) => ({
+      ...prev,
+      [slot]: {
+        sets: Array.from({ length: ex.targetSets }, (_, i) => {
+          const ref = last[i] ?? last[last.length - 1] ?? null;
+          return {
+            weight: ref?.weight_lb != null ? String(ref.weight_lb) : "",
+            reps: ref?.reps != null ? String(ref.reps) : "",
+          };
+        }),
+      },
+    }));
   }
 
   function updateSet(exerciseName: string, setIdx: number, field: "weight" | "reps", value: string) {
@@ -674,13 +840,16 @@ export default function LiftPage() {
       if (hiddenExercises.has(ex.name)) continue;
       const form = forms[ex.name];
       if (!form) continue;
+      // Log the exercise actually performed (the swap, if any), so history
+      // accrues under the right name.
+      const loggedName = effectiveName(ex.name);
       form.sets.forEach((s, idx) => {
         // Only save sets where user entered at least reps.
         const weight = s.weight.trim() ? parseFloat(s.weight) : null;
         const reps = s.reps.trim() ? parseInt(s.reps, 10) : null;
         if (reps !== null || weight !== null) {
           allSets.push({
-            exercise_name: ex.name,
+            exercise_name: loggedName,
             set_number: idx + 1,
             weight_lb: weight,
             reps,
@@ -743,6 +912,7 @@ export default function LiftPage() {
     // Go back to the template picker.
     setActiveTemplate(null);
     setForms({});
+    setSwaps({});
     setSessionNotes("");
     setSessionMood(null);
     setSessionIntensity(null);
@@ -758,6 +928,7 @@ export default function LiftPage() {
     if (confirm("Cancel workout? Entered sets will be lost.")) {
       setActiveTemplate(null);
       setForms({});
+      setSwaps({});
       setSessionNotes("");
       setSessionMood(null);
       setErrorMsg(null);
@@ -1216,8 +1387,33 @@ export default function LiftPage() {
           </div>
         )}
 
+        {/* Program toggle — pick the split you're running this week, then a
+            day below updates to match. */}
+        <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+          {(["3-day", "2-day"] as Program[]).map((p) => {
+            const active = selectedProgram === p;
+            return (
+              <button
+                key={p}
+                onClick={() => setSelectedProgram(p)}
+                className={`py-2.5 rounded-xl text-sm font-semibold transition-colors ${
+                  active
+                    ? "bg-white dark:bg-zinc-800 text-indigo-700 dark:text-indigo-300 shadow-sm"
+                    : "text-zinc-500"
+                }`}
+                aria-pressed={active}
+              >
+                {PROGRAM_INFO[p].label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-xs text-zinc-500 mt-2 mb-4 px-1">
+          {PROGRAM_INFO[selectedProgram].blurb}
+        </p>
+
         <div className="space-y-4">
-          {TEMPLATES.map((t) => (
+          {TEMPLATES.filter((t) => t.program === selectedProgram).map((t) => (
             <button
               key={t.name}
               onClick={() => startTemplate(t)}
@@ -1379,30 +1575,43 @@ export default function LiftPage() {
           .filter((ex) => !hiddenExercises.has(ex.name))
           .map((ex) => {
           const form = forms[ex.name];
-          const last = lastTimes[ex.name];
+          // The exercise actually being done (swap or primary) drives the
+          // title, the "Last:" hint, and what gets logged.
+          const eff = effectiveName(ex.name);
+          const isSwapped = eff !== ex.name;
+          const last = lastTimes[eff];
+          const hasAlts = (ex.alternatives?.length ?? 0) > 0;
+          const swapOpen = openSwap === ex.name;
+          // Options offered in the swap panel: the primary first, then alts.
+          const swapOptions = [ex.name, ...(ex.alternatives ?? [])];
           return (
             <section
               key={ex.name}
               className="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
             >
               <div className="flex items-baseline justify-between gap-2">
-                <h2 className="font-semibold leading-tight flex-1 min-w-0">{ex.name}</h2>
+                <h2 className="font-semibold leading-tight flex-1 min-w-0">{eff}</h2>
                 <span className="text-xs text-zinc-400 whitespace-nowrap">
                   {ex.targetSets} × {ex.targetReps}
                 </span>
                 <button
                   onClick={() => {
-                    if (confirm(`Skip ${ex.name} for this workout?`)) {
+                    if (confirm(`Skip ${eff} for this workout?`)) {
                       hideExercise(ex.name);
                     }
                   }}
                   className="text-zinc-400 hover:text-red-500 text-lg leading-none px-1"
-                  aria-label={`Skip ${ex.name}`}
+                  aria-label={`Skip ${eff}`}
                   title="Skip this exercise"
                 >
                   ×
                 </button>
               </div>
+              {isSwapped && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5">
+                  ↳ swapped from {ex.name}
+                </p>
+              )}
               {ex.note && (
                 <p className="text-xs text-zinc-500 mt-1">{ex.note}</p>
               )}
@@ -1413,6 +1622,47 @@ export default function LiftPage() {
                 </p>
               ) : (
                 <p className="text-xs text-zinc-400 mt-1">No history yet</p>
+              )}
+
+              {/* Swap control — only when alternatives exist. Tapping reveals
+                  a panel of options; picking one re-pulls that exercise's
+                  history and what gets logged. */}
+              {hasAlts && (
+                <div className="mt-2">
+                  <button
+                    onClick={() => setOpenSwap(swapOpen ? null : ex.name)}
+                    className="text-xs font-medium text-indigo-600 dark:text-indigo-400"
+                    aria-expanded={swapOpen}
+                  >
+                    {swapOpen ? "Close" : isSwapped ? "⇄ Change / revert" : "⇄ Swap exercise"}
+                  </button>
+                  {swapOpen && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {swapOptions.map((opt) => {
+                        const selected = opt === eff;
+                        const isPrimary = opt === ex.name;
+                        return (
+                          <button
+                            key={opt}
+                            onClick={() => swapExercise(ex.name, opt)}
+                            className={`px-2.5 py-1.5 rounded-lg text-xs border ${
+                              selected
+                                ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 font-semibold"
+                                : "border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300"
+                            }`}
+                          >
+                            {opt}
+                            {isPrimary && (
+                              <span className="text-[10px] text-zinc-400 ml-1">
+                                default
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               )}
 
               {/* Set input rows. ± buttons step weight by 5 and reps by 1
