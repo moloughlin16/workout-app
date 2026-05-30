@@ -197,6 +197,14 @@ export default function PlannerPage() {
   const [eIntensity, setEIntensity] = useState<Intensity | null>(null);
   const [eNotes, setENotes] = useState<string>("");
 
+  // ── Action sheet state ──────────────────────────────────────────────
+  // Opened by tapping a martial-arts / planned / lift card. Those entries
+  // are edited on their own page, so this lightweight sheet just offers
+  // "Open in …" plus an explicit Delete (the cardio/custom sheet has its
+  // own Delete; this gives the other three sources one too, behind the
+  // same clearly-worded confirm rather than an easy-to-misfire inline ×).
+  const [actionEntry, setActionEntry] = useState<Entry | null>(null);
+
   useEffect(() => {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -207,13 +215,13 @@ export default function PlannerPage() {
   // Restoring on unmount handles the case where the user navigates away
   // mid-sheet (rare, but safer).
   useEffect(() => {
-    if (!addTarget && !editEntry) return;
+    if (!addTarget && !editEntry && !actionEntry) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [addTarget, editEntry]);
+  }, [addTarget, editEntry, actionEntry]);
 
   async function loadAll() {
     setLoading(true);
@@ -686,8 +694,9 @@ export default function PlannerPage() {
       setEntries(previous);
       return;
     }
-    // If we were editing this entry, bail out of the sheet.
+    // If we were editing/acting on this entry, bail out of the sheet.
     if (editEntry?.id === entry.id) closeEditForm();
+    if (actionEntry?.id === entry.id) setActionEntry(null);
   }
 
   return (
@@ -796,17 +805,12 @@ export default function PlannerPage() {
                             ? tint
                             : "bg-zinc-50 dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800";
                           const isPlanned = e.source === "ma_planned";
-                          // cardio + custom edit inline; everything else
-                          // routes to its own page (where deletion + full
-                          // editing live behind explicit confirms).
+                          // cardio + custom open the full edit sheet inline.
+                          // ma / ma_planned / lift open a lightweight action
+                          // sheet (open-in-page or delete) — they're edited on
+                          // their own page, but can now be deleted from here.
                           const editable =
                             e.source === "cardio" || e.source === "custom";
-                          const href =
-                            e.source === "lift"
-                              ? "/lift"
-                              : e.source === "ma" || e.source === "ma_planned"
-                                ? "/martial-arts"
-                                : null;
                           const cls = `w-full text-left flex items-start gap-2 p-2 rounded-lg border ${cardClass} ${isPlanned ? "border-dashed" : ""} active:scale-[0.99] transition-transform`;
                           const inner = (
                             <>
@@ -829,18 +833,16 @@ export default function PlannerPage() {
                           );
                           return (
                             <li key={e.id}>
-                              {editable ? (
-                                <button
-                                  onClick={() => openEditEntry(e)}
-                                  className={cls}
-                                >
-                                  {inner}
-                                </button>
-                              ) : (
-                                <Link href={href!} className={cls}>
-                                  {inner}
-                                </Link>
-                              )}
+                              <button
+                                onClick={() =>
+                                  editable
+                                    ? openEditEntry(e)
+                                    : setActionEntry(e)
+                                }
+                                className={cls}
+                              >
+                                {inner}
+                              </button>
                             </li>
                           );
                         })}
@@ -1354,6 +1356,56 @@ export default function PlannerPage() {
                 className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm disabled:opacity-50"
               >
                 {submitting ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Action sheet (ma / ma_planned / lift). These are edited on their own
+          page, so this just offers "Open in …" + an explicit Delete. */}
+      {actionEntry && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/50 flex items-end sm:items-center justify-center"
+          onClick={() => setActionEntry(null)}
+        >
+          <div
+            className="w-full max-w-md bg-white dark:bg-zinc-900 sm:rounded-2xl rounded-t-2xl sm:border border-t border-zinc-200 dark:border-zinc-800 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-5 pb-2">
+              <div className="min-w-0">
+                <h3 className="text-base font-bold truncate">
+                  {actionEntry.emoji} {actionEntry.title}
+                </h3>
+                {actionEntry.subtitle && (
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    {actionEntry.subtitle}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => setActionEntry(null)}
+                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 text-xl px-1 flex-shrink-0"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 pt-2 space-y-2">
+              <Link
+                href={actionEntry.source === "lift" ? "/lift" : "/martial-arts"}
+                className="block w-full text-center py-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 font-semibold text-sm"
+              >
+                {actionEntry.source === "lift"
+                  ? "Open in Lift →"
+                  : "Open in Martial Arts →"}
+              </Link>
+              <button
+                onClick={() => handleDelete(actionEntry)}
+                className="w-full py-2.5 rounded-xl bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 font-semibold text-sm border border-red-200 dark:border-red-900/40"
+              >
+                Delete
               </button>
             </div>
           </div>
