@@ -180,6 +180,19 @@ export default function PlannerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart]);
 
+  // Lock background body scroll while the add sheet is open so a finger
+  // drag on the modal can't accidentally scroll the planner underneath.
+  // Restoring on unmount handles the case where the user navigates away
+  // mid-sheet (rare, but safer).
+  useEffect(() => {
+    if (!addTarget) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [addTarget]);
+
   async function loadAll() {
     setLoading(true);
     setErrorMsg(null);
@@ -696,17 +709,23 @@ export default function PlannerPage() {
         })}
       </div>
 
-      {/* Add-entry sheet (overlay) */}
+      {/* Add-entry sheet (overlay).
+          z-[60] sits above the bottom nav (z-50), so the sheet visually
+          covers the tabs while it's open. Sheet itself uses a flex column
+          with a scrollable middle so long forms can't push the Add button
+          out of reach — only the body scrolls, not the page underneath. */}
       {addTarget && (
         <div
-          className="fixed inset-0 z-50 bg-black/50 flex items-end sm:items-center justify-center p-4"
+          className="fixed inset-0 z-[60] bg-black/50 flex items-end sm:items-center justify-center"
           onClick={closeAddForm}
         >
           <div
-            className="w-full max-w-md bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 p-5 shadow-xl"
+            className="w-full max-w-md bg-white dark:bg-zinc-900 sm:rounded-2xl rounded-t-2xl sm:border border-t border-zinc-200 dark:border-zinc-800 shadow-xl flex flex-col"
+            style={{ maxHeight: "min(85vh, 720px)" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between mb-4">
+            {/* Fixed header */}
+            <div className="flex items-center justify-between p-5 pb-3 flex-shrink-0">
               <h3 className="text-base font-bold">
                 Add to{" "}
                 {DAY_PARTS.find((p) => p.id === addTarget.dayPart)?.label}
@@ -718,6 +737,10 @@ export default function PlannerPage() {
                 ✕
               </button>
             </div>
+
+            {/* Scrollable body. overscroll-contain stops scroll chaining
+                to the background page when the inner list reaches its end. */}
+            <div className="flex-1 overflow-y-auto overscroll-contain px-5">
 
             {/* Type toggle — 4 options. Compact pill row. */}
             <div className="grid grid-cols-4 gap-1 mb-4 p-1 rounded-lg bg-zinc-100 dark:bg-zinc-800">
@@ -1015,13 +1038,21 @@ export default function PlannerPage() {
               </div>
             )}
 
-            <button
-              onClick={handleAddSubmit}
-              disabled={submitting}
-              className="w-full mt-4 py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm disabled:opacity-50"
-            >
-              {submitting ? "Saving…" : "Add"}
-            </button>
+              {/* ── close the scrollable body ── */}
+              <div className="h-4" />
+            </div>
+
+            {/* Pinned footer with the Add button — always reachable, even
+                when the form's content is taller than the viewport. */}
+            <div className="flex-shrink-0 p-5 pt-3 border-t border-zinc-200 dark:border-zinc-800">
+              <button
+                onClick={handleAddSubmit}
+                disabled={submitting}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm disabled:opacity-50"
+              >
+                {submitting ? "Saving…" : "Add"}
+              </button>
+            </div>
           </div>
         </div>
       )}
