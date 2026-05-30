@@ -18,7 +18,10 @@ import {
   DISCIPLINE_COLOR,
   classDurationMin,
 } from "@/lib/gym-schedule";
-import IntensityPicker, { type Intensity } from "@/components/IntensityPicker";
+import IntensityPicker, {
+  intensityCardClass,
+  type Intensity,
+} from "@/components/IntensityPicker";
 
 // Day order used for the tab row and the array-index math below.
 // Monday is index 0 because we treat Monday as start-of-week everywhere.
@@ -379,14 +382,20 @@ export default function SchedulePage() {
                   ? `${duration / 60}h`
                   : `${Math.floor(duration / 60)}h ${duration % 60}m`;
 
+            // When planned WITH an intensity, tint the whole card a light
+            // shade of that intensity's color. When planned without, fall
+            // back to the indigo "planned" treatment. Unplanned cards stay
+            // neutral white/zinc.
+            const intensityTint =
+              isPlanned ? intensityCardClass(isPlanned.intensity) : "";
+            const cardClass = isPlanned
+              ? intensityTint ||
+                "bg-indigo-50 dark:bg-indigo-950/30 border-indigo-300 dark:border-indigo-800"
+              : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800";
             return (
               <li
                 key={keyBase}
-                className={`p-3 rounded-xl border ${
-                  isPlanned
-                    ? "bg-indigo-50 dark:bg-indigo-950/30 border-indigo-300 dark:border-indigo-800"
-                    : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800"
-                }`}
+                className={`p-3 rounded-xl border ${cardClass}`}
               >
                 <div className="flex items-center gap-2">
                   <span
@@ -435,9 +444,11 @@ export default function SchedulePage() {
                 </div>
 
                 {/* Intensity picker — only visible once a class is planned.
-                    Lets you pre-plan a balance of high/medium/low days. */}
+                    Lets you pre-plan a balance of high/medium/low days.
+                    Divider uses a translucent border so it looks fine on
+                    any of the intensity-tinted card backgrounds. */}
                 {isPlanned && (
-                  <div className="mt-3 pt-3 border-t border-indigo-200 dark:border-indigo-900/50">
+                  <div className="mt-3 pt-3 border-t border-black/10 dark:border-white/10">
                     <IntensityPicker
                       value={isPlanned.intensity}
                       onChange={(v) => setPlannedIntensity(isPlanned.id, v)}

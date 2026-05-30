@@ -13,6 +13,7 @@ import {
 import NoteText from "@/components/NoteText";
 import IntensityPicker, {
   IntensityBadge,
+  intensityCardClass,
   type Intensity,
 } from "@/components/IntensityPicker";
 
@@ -410,10 +411,15 @@ export default function MartialArtsPage() {
             {weekSessions.map((s) => {
               const isExpanded = expandedId === s.id;
               const hasNote = (s.notes ?? "").trim().length > 0;
+              // Tint the row by intensity when set; otherwise neutral.
+              const tint = intensityCardClass(s.intensity);
+              const cardClass = tint
+                ? tint
+                : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800";
               return (
                 <li
                   key={s.id}
-                  className="rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 overflow-hidden"
+                  className={`rounded-xl border overflow-hidden ${cardClass}`}
                 >
                   <div className="flex items-center gap-3 p-3">
                     <button
@@ -455,7 +461,7 @@ export default function MartialArtsPage() {
                   </div>
 
                   {isExpanded && (
-                    <div className="px-3 pb-3 border-t border-zinc-100 dark:border-zinc-800 pt-3">
+                    <div className="px-3 pb-3 border-t border-black/10 dark:border-white/10 pt-3">
                       {/* Duration input row */}
                       <div className="flex items-center gap-2 mb-3">
                         <label

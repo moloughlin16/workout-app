@@ -66,6 +66,26 @@ export function intensityLabel(value: Intensity | null | undefined): string {
   return SCALE.find((s) => s.value === value)?.label ?? "";
 }
 
+/**
+ * Tailwind class string that tints a whole card a light shade of the
+ * intensity's color (bg + border). Returns "" when intensity is null so
+ * callers can chain a default with `|| defaultClasses`.
+ */
+export function intensityCardClass(
+  value: Intensity | null | undefined
+): string {
+  if (value === "low") {
+    return "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/50";
+  }
+  if (value === "medium") {
+    return "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/50";
+  }
+  if (value === "high") {
+    return "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-900/50";
+  }
+  return "";
+}
+
 export default function IntensityPicker({ value, onChange, label }: Props) {
   return (
     <div>
