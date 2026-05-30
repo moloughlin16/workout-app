@@ -16,6 +16,7 @@
 // ============================================================
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import {
   addDays,
@@ -52,6 +53,10 @@ type Entry = {
   subtitle?: string;
   emoji: string;
   intensity: Intensity | null;
+  // Raw fields carried through for in-planner editing (cardio + custom).
+  notes?: string | null;
+  startTime?: string | null;
+  durationMin?: number;
 };
 
 const DAYS_LABEL: { short: string; full: string }[] = [
@@ -70,36 +75,40 @@ const DAY_PARTS: { id: DayPart; label: string; emoji: string }[] = [
   { id: "evening", label: "Evening", emoji: "🌙" },
 ];
 
-/** Bucket a clock time string into a day-part. Defaults to fallback when null. */
+// ── Time-of-day bucketing ───────────────────────────────────────────
+// One rule, used for BOTH where an entry displays AND which classes a
+// slot's picker offers — so anything you add to a slot stays in that slot.
+// Boundaries match how the user mentally groups their training day:
+//   morning   = before 11:00
+//   afternoon = 11:00 up to (not incl.) 16:30
+//   evening   = 16:30 onward
+// (e.g. 10:30 Sat Kickboxing = morning, 11:00 Dutch KB = afternoon,
+//  4:30pm NoGi = evening.)
+const MORNING_END = "11:00"; // < this = morning
+const EVENING_START = "16:30"; // >= this = evening; between the two = afternoon
+
+/** Bucket a clock time string ("HH:MM" / "HH:MM:SS") into a day-part. */
 function bucketByTime(
   time: string | null | undefined,
   fallback: DayPart = "morning"
 ): DayPart {
   if (!time) return fallback;
-  const hour = parseInt(time.split(":")[0], 10);
-  if (!Number.isFinite(hour)) return fallback;
-  if (hour < 12) return "morning";
-  if (hour < 17) return "afternoon";
-  return "evening";
+  // Compare as zero-padded "HH:MM" strings — lexicographic order matches
+  // chronological order for fixed-width 24-hour times.
+  const hhmm = time.slice(0, 5);
+  if (!/^\d\d:\d\d$/.test(hhmm)) return fallback;
+  if (hhmm < MORNING_END) return "morning";
+  if (hhmm >= EVENING_START) return "evening";
+  return "afternoon";
 }
 
-/** Sensible default start_time when adding cardio from a slot. */
+/** Sensible default start_time when adding from a slot (also used to pre-fill
+ *  the editable time field). Each lands squarely inside its own bucket. */
 function defaultStartTimeForSlot(slot: DayPart): string {
   if (slot === "morning") return "09:00";
-  if (slot === "afternoon") return "14:00";
+  if (slot === "afternoon") return "13:00";
   return "18:00";
 }
-
-// Time windows for picking Elevate classes when adding an MA entry from
-// a particular slot. These are intentionally narrower than the general
-// time-bucketing rules — they match the times of day the user actually
-// trains (before-work / lunch / after-work). Classes outside these
-// windows can still be logged via the "Custom" toggle.
-const CLASS_PICK_WINDOWS: Record<DayPart, { start: string; end: string }> = {
-  morning: { start: "07:30", end: "08:30" },
-  afternoon: { start: "11:00", end: "14:00" },
-  evening: { start: "16:30", end: "23:59" },
-};
 
 const DAY_NAMES: DayOfWeek[] = [
   "Sunday",
@@ -117,13 +126,12 @@ function dayOfWeekFor(dateStr: string): DayOfWeek {
   return DAY_NAMES[new Date(yyyy, mm - 1, dd).getDay()];
 }
 
-/** Classes from the gym schedule that fall inside this slot's window. */
+/** Classes from the gym schedule that fall inside this slot — derived from
+ *  the SAME bucketing rule used to display them, so a class picked from a
+ *  slot always reappears in that slot, with no times falling through gaps. */
 function classesForSlot(date: string, slot: DayPart): GymClass[] {
   const day = dayOfWeekFor(date);
-  const win = CLASS_PICK_WINDOWS[slot];
-  return GYM_SCHEDULE[day].filter(
-    (c) => c.start >= win.start && c.start <= win.end
-  );
+  return GYM_SCHEDULE[day].filter((c) => bucketByTime(c.start) === slot);
 }
 
 /** Common Zone 2 cardio activities — used as quick-pick buttons. */
@@ -165,6 +173,7 @@ export default function PlannerPage() {
   // Cardio form fields
   const [cardioActivity, setCardioActivity] = useState<string>("Walking");
   const [cardioDuration, setCardioDuration] = useState<string>("30");
+  const [cardioTime, setCardioTime] = useState<string>("09:00");
   const [cardioIntensity, setCardioIntensity] = useState<Intensity | null>("low");
   const [cardioNotes, setCardioNotes] = useState<string>("");
 
@@ -174,6 +183,19 @@ export default function PlannerPage() {
   const [customNotes, setCustomNotes] = useState<string>("");
 
   const [submitting, setSubmitting] = useState(false);
+
+  // ── Edit-entry sheet state ──────────────────────────────────────────
+  // Opened by tapping a cardio or custom card. Other sources route to their
+  // own page instead (see card rendering below). Kept separate from the add
+  // form so the two sheets can't clobber each other's fields.
+  const [editEntry, setEditEntry] = useState<Entry | null>(null);
+  const [eActivity, setEActivity] = useState<string>("");
+  const [eDuration, setEDuration] = useState<string>("");
+  const [eTime, setETime] = useState<string>("");
+  const [eTitle, setETitle] = useState<string>("");
+  const [eDayPart, setEDayPart] = useState<DayPart>("morning");
+  const [eIntensity, setEIntensity] = useState<Intensity | null>(null);
+  const [eNotes, setENotes] = useState<string>("");
 
   useEffect(() => {
     loadAll();
@@ -185,13 +207,13 @@ export default function PlannerPage() {
   // Restoring on unmount handles the case where the user navigates away
   // mid-sheet (rare, but safer).
   useEffect(() => {
-    if (!addTarget) return;
+    if (!addTarget && !editEntry) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [addTarget]);
+  }, [addTarget, editEntry]);
 
   async function loadAll() {
     setLoading(true);
@@ -214,12 +236,12 @@ export default function PlannerPage() {
         .lt("date", weekEnd),
       supabase
         .from("lift_sessions")
-        .select("id, date, template_name, intensity")
+        .select("id, date, template_name, start_time, intensity")
         .gte("date", weekStart)
         .lt("date", weekEnd),
       supabase
         .from("cardio_sessions")
-        .select("id, date, activity, duration_min, start_time, intensity")
+        .select("id, date, activity, duration_min, start_time, intensity, notes")
         .gte("date", weekStart)
         .lt("date", weekEnd),
       supabase
@@ -273,18 +295,20 @@ export default function PlannerPage() {
       });
     }
 
-    // Lifts — default to morning per user preference
+    // Lifts — bucket by start_time if the planner set one; otherwise default
+    // to morning (matches lifts logged from the Lift tab, which have no time).
     for (const r of (liftRes.data ?? []) as Array<{
       id: string;
       date: string;
       template_name: string;
+      start_time: string | null;
       intensity: Intensity | null;
     }>) {
       out.push({
         id: `lift-${r.id}`,
         source: "lift",
         date: r.date,
-        day_part: "morning",
+        day_part: bucketByTime(r.start_time, "morning"),
         title: r.template_name,
         subtitle: "Lift session",
         emoji: "🏋️",
@@ -301,6 +325,7 @@ export default function PlannerPage() {
         duration_min: number;
         start_time: string | null;
         intensity: Intensity | null;
+        notes: string | null;
       }>) {
         out.push({
           id: `cardio-${r.id}`,
@@ -311,6 +336,9 @@ export default function PlannerPage() {
           subtitle: `${r.duration_min}m${r.start_time ? ` · ${formatClockTime(r.start_time)}` : ""}`,
           emoji: "🚶",
           intensity: r.intensity,
+          notes: r.notes,
+          startTime: r.start_time,
+          durationMin: r.duration_min,
         });
       }
     }
@@ -323,6 +351,7 @@ export default function PlannerPage() {
         day_part: DayPart;
         title: string;
         intensity: Intensity | null;
+        notes: string | null;
       }>) {
         out.push({
           id: `plan-${r.id}`,
@@ -333,6 +362,7 @@ export default function PlannerPage() {
           subtitle: "Custom",
           emoji: "📝",
           intensity: r.intensity,
+          notes: r.notes,
         });
       }
     }
@@ -361,6 +391,7 @@ export default function PlannerPage() {
     // Cardio defaults
     setCardioActivity("Walking");
     setCardioDuration("30");
+    setCardioTime(defaultStartTimeForSlot(target.dayPart));
     setCardioIntensity("low");
     setCardioNotes("");
     // Custom defaults
@@ -474,6 +505,9 @@ export default function PlannerPage() {
       const { error } = await supabase.from("lift_sessions").insert({
         date: addTarget.date,
         template_name: liftTemplate,
+        // Pre-fill start_time from the slot so the placeholder buckets back
+        // into the slot the user added it to (morning/afternoon/evening).
+        start_time: defaultStartTimeForSlot(addTarget.dayPart),
         intensity: liftIntensity,
         notes: liftNotes.trim() || null,
       });
@@ -495,9 +529,9 @@ export default function PlannerPage() {
         date: addTarget.date,
         activity: activityValue,
         duration_min: dur,
-        // Pre-fill start_time based on the slot the user tapped, so the
-        // entry buckets back into the right place on refresh.
-        start_time: defaultStartTimeForSlot(addTarget.dayPart),
+        // Editable time field, pre-filled from the tapped slot. Buckets the
+        // entry back into the matching day-part on refresh.
+        start_time: `${cardioTime}:00`,
         intensity: cardioIntensity,
         notes: cardioNotes.trim() || null,
       });
@@ -535,25 +569,112 @@ export default function PlannerPage() {
     loadAll();
   }
 
+  // ── Edit an existing cardio / custom entry ──────────────────────────
+  // Tapping one of those cards opens this sheet pre-filled. (lift / MA cards
+  // route to their own pages instead — see card rendering.)
+  function openEditEntry(entry: Entry) {
+    setEditEntry(entry);
+    setEIntensity(entry.intensity);
+    setENotes(entry.notes ?? "");
+    if (entry.source === "cardio") {
+      setEActivity(entry.title);
+      setEDuration(String(entry.durationMin ?? ""));
+      setETime((entry.startTime ?? "").slice(0, 5) || defaultStartTimeForSlot(entry.day_part));
+    } else {
+      setETitle(entry.title);
+      setEDayPart(entry.day_part);
+    }
+  }
+
+  function closeEditForm() {
+    setEditEntry(null);
+  }
+
+  async function handleEditSubmit() {
+    if (!editEntry) return;
+    setSubmitting(true);
+    setErrorMsg(null);
+    const realId = editEntry.id.split("-").slice(1).join("-");
+
+    if (editEntry.source === "cardio") {
+      const dur = parseInt(eDuration, 10);
+      if (!Number.isFinite(dur) || dur <= 0) {
+        setErrorMsg("Duration must be a positive number.");
+        setSubmitting(false);
+        return;
+      }
+      const { error } = await supabase
+        .from("cardio_sessions")
+        .update({
+          activity: eActivity.trim() || "Cardio",
+          duration_min: dur,
+          start_time: eTime ? `${eTime}:00` : null,
+          intensity: eIntensity,
+          notes: eNotes.trim() || null,
+        })
+        .eq("id", realId);
+      if (error) {
+        setErrorMsg(`Couldn't save: ${error.message}`);
+        setSubmitting(false);
+        return;
+      }
+    } else if (editEntry.source === "custom") {
+      const title = eTitle.trim();
+      if (!title) {
+        setErrorMsg("Give the entry a title.");
+        setSubmitting(false);
+        return;
+      }
+      const { error } = await supabase
+        .from("weekly_plans")
+        .update({
+          title,
+          day_part: eDayPart,
+          intensity: eIntensity,
+          notes: eNotes.trim() || null,
+        })
+        .eq("id", realId);
+      if (error) {
+        setErrorMsg(`Couldn't save: ${error.message}`);
+        setSubmitting(false);
+        return;
+      }
+    }
+
+    setSubmitting(false);
+    closeEditForm();
+    loadAll();
+  }
+
   /**
-   * Delete an entry. Routes to the right table based on its source.
-   * MA / lift entries open a confirm and only delete if confirmed — those
-   * are real training records and accidental deletion would be costly.
+   * Delete an entry, routing to the right table by source. The confirm copy
+   * is explicit that this erases the underlying record (and any notes) — the
+   * old "Delete X?" wording read like "remove from this view" and made
+   * accidental loss of real sessions too easy.
    */
   async function handleDelete(entry: Entry) {
-    const okPrompt = `Delete "${entry.title}"?`;
-    if (!confirm(okPrompt)) return;
+    const LABEL: Record<Entry["source"], string> = {
+      ma: "logged martial arts session",
+      ma_planned: "planned class",
+      lift: "logged lift session",
+      cardio: "cardio session",
+      custom: "custom plan",
+    };
+    const erasesNotes = entry.source === "ma" || entry.source === "lift";
+    const msg = `Permanently delete this ${LABEL[entry.source]} ("${entry.title}")${
+      erasesNotes ? ", including any notes and sets" : ""
+    }? This can't be undone.`;
+    if (!confirm(msg)) return;
 
-    // Strip the source prefix off the ID.
     const realId = entry.id.split("-").slice(1).join("-");
-
-    let table = "";
-    if (entry.source === "cardio") table = "cardio_sessions";
-    else if (entry.source === "custom") table = "weekly_plans";
-    else if (entry.source === "ma") table = "martial_arts_sessions";
-    else if (entry.source === "ma_planned") table = "planned_sessions";
-    else if (entry.source === "lift") table = "lift_sessions";
-    if (!table) return;
+    const TABLE: Record<Entry["source"], string> = {
+      ma: "martial_arts_sessions",
+      ma_planned: "planned_sessions",
+      lift: "lift_sessions",
+      cardio: "cardio_sessions",
+      custom: "weekly_plans",
+    };
+    const table = TABLE[entry.source];
 
     const previous = entries;
     setEntries((prev) => prev.filter((e) => e.id !== entry.id));
@@ -563,7 +684,10 @@ export default function PlannerPage() {
       console.error("Delete failed:", error.message);
       setErrorMsg(`Couldn't delete: ${error.message}`);
       setEntries(previous);
+      return;
     }
+    // If we were editing this entry, bail out of the sheet.
+    if (editEntry?.id === entry.id) closeEditForm();
   }
 
   return (
@@ -672,11 +796,20 @@ export default function PlannerPage() {
                             ? tint
                             : "bg-zinc-50 dark:bg-zinc-950 border-zinc-200 dark:border-zinc-800";
                           const isPlanned = e.source === "ma_planned";
-                          return (
-                            <li
-                              key={e.id}
-                              className={`flex items-start gap-2 p-2 rounded-lg border ${cardClass} ${isPlanned ? "border-dashed" : ""}`}
-                            >
+                          // cardio + custom edit inline; everything else
+                          // routes to its own page (where deletion + full
+                          // editing live behind explicit confirms).
+                          const editable =
+                            e.source === "cardio" || e.source === "custom";
+                          const href =
+                            e.source === "lift"
+                              ? "/lift"
+                              : e.source === "ma" || e.source === "ma_planned"
+                                ? "/martial-arts"
+                                : null;
+                          const cls = `w-full text-left flex items-start gap-2 p-2 rounded-lg border ${cardClass} ${isPlanned ? "border-dashed" : ""} active:scale-[0.99] transition-transform`;
+                          const inner = (
+                            <>
                               <span className="text-base flex-shrink-0">
                                 {e.emoji}
                               </span>
@@ -689,13 +822,25 @@ export default function PlannerPage() {
                                   <IntensityBadge value={e.intensity} />
                                 </div>
                               </div>
-                              <button
-                                onClick={() => handleDelete(e)}
-                                className="text-zinc-400 hover:text-red-500 text-base flex-shrink-0"
-                                aria-label="Delete entry"
-                              >
-                                ×
-                              </button>
+                              <span className="text-zinc-400 text-sm flex-shrink-0 self-center">
+                                ›
+                              </span>
+                            </>
+                          );
+                          return (
+                            <li key={e.id}>
+                              {editable ? (
+                                <button
+                                  onClick={() => openEditEntry(e)}
+                                  className={cls}
+                                >
+                                  {inner}
+                                </button>
+                              ) : (
+                                <Link href={href!} className={cls}>
+                                  {inner}
+                                </Link>
+                              )}
                             </li>
                           );
                         })}
@@ -776,12 +921,13 @@ export default function PlannerPage() {
                         addTarget.date,
                         addTarget.dayPart
                       );
-                      const win = CLASS_PICK_WINDOWS[addTarget.dayPart];
+                      const slotLabel =
+                        DAY_PARTS.find((p) => p.id === addTarget.dayPart)
+                          ?.label.toLowerCase() ?? "this slot";
                       if (available.length === 0) {
                         return (
                           <div className="p-3 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-600 dark:text-zinc-400">
-                            No Elevate classes scheduled between{" "}
-                            {win.start} and {win.end} on this day.
+                            No Elevate classes scheduled this {slotLabel}.
                             <button
                               onClick={() => setMaCustomMode(true)}
                               className="block mt-1.5 text-indigo-600 dark:text-indigo-400 font-medium"
@@ -1000,6 +1146,15 @@ export default function PlannerPage() {
                     className="w-16 text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
                   />
                   <span className="text-xs text-zinc-500">min</span>
+                  <label className="text-xs font-medium text-zinc-500 ml-2">
+                    Time
+                  </label>
+                  <input
+                    type="time"
+                    value={cardioTime}
+                    onChange={(e) => setCardioTime(e.target.value)}
+                    className="text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                  />
                 </div>
                 <IntensityPicker
                   value={cardioIntensity}
@@ -1051,6 +1206,154 @@ export default function PlannerPage() {
                 className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm disabled:opacity-50"
               >
                 {submitting ? "Saving…" : "Add"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit sheet (cardio / custom). Same layout language as the add sheet. */}
+      {editEntry && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/50 flex items-end sm:items-center justify-center"
+          onClick={closeEditForm}
+        >
+          <div
+            className="w-full max-w-md bg-white dark:bg-zinc-900 sm:rounded-2xl rounded-t-2xl sm:border border-t border-zinc-200 dark:border-zinc-800 shadow-xl flex flex-col"
+            style={{ maxHeight: "min(85vh, 720px)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-5 pb-3 flex-shrink-0">
+              <h3 className="text-base font-bold">
+                {editEntry.source === "cardio" ? "Edit cardio" : "Edit plan"}
+              </h3>
+              <button
+                onClick={closeEditForm}
+                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 text-xl px-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto overscroll-contain px-5">
+              {editEntry.source === "cardio" && (
+                <div className="space-y-3">
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500 mb-1.5 block">
+                      Activity
+                    </label>
+                    <div className="flex gap-1 flex-wrap mb-2">
+                      {CARDIO_PRESETS.map((p) => (
+                        <button
+                          key={p}
+                          onClick={() => setEActivity(p)}
+                          className={`px-3 py-1 rounded-full text-xs font-medium ${
+                            eActivity === p
+                              ? "bg-indigo-600 text-white"
+                              : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400"
+                          }`}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                    </div>
+                    <input
+                      type="text"
+                      value={eActivity}
+                      onChange={(e) => setEActivity(e.target.value)}
+                      placeholder="or type your own…"
+                      className="w-full text-sm px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs font-medium text-zinc-500">
+                      Duration
+                    </label>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      value={eDuration}
+                      onChange={(e) => setEDuration(e.target.value)}
+                      className="w-16 text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                    />
+                    <span className="text-xs text-zinc-500">min</span>
+                    <label className="text-xs font-medium text-zinc-500 ml-2">
+                      Time
+                    </label>
+                    <input
+                      type="time"
+                      value={eTime}
+                      onChange={(e) => setETime(e.target.value)}
+                      className="text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                    />
+                  </div>
+                  <IntensityPicker value={eIntensity} onChange={setEIntensity} />
+                  <textarea
+                    value={eNotes}
+                    onChange={(e) => setENotes(e.target.value)}
+                    placeholder="Notes (optional)"
+                    rows={2}
+                    className="w-full text-sm p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                  />
+                </div>
+              )}
+
+              {editEntry.source === "custom" && (
+                <div className="space-y-3">
+                  <input
+                    type="text"
+                    value={eTitle}
+                    onChange={(e) => setETitle(e.target.value)}
+                    placeholder="e.g. Rest day, Stretching, Yoga…"
+                    className="w-full text-sm px-2 py-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                  />
+                  <div>
+                    <label className="text-xs font-medium text-zinc-500 mb-1.5 block">
+                      When
+                    </label>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {DAY_PARTS.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => setEDayPart(p.id)}
+                          className={`py-2 rounded-lg text-xs font-semibold border-2 ${
+                            eDayPart === p.id
+                              ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300"
+                              : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400"
+                          }`}
+                        >
+                          {p.emoji} {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <IntensityPicker value={eIntensity} onChange={setEIntensity} />
+                  <textarea
+                    value={eNotes}
+                    onChange={(e) => setENotes(e.target.value)}
+                    placeholder="Notes (optional)"
+                    rows={2}
+                    className="w-full text-sm p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                  />
+                </div>
+              )}
+              <div className="h-4" />
+            </div>
+
+            <div className="flex-shrink-0 p-5 pt-3 border-t border-zinc-200 dark:border-zinc-800 flex items-center gap-3">
+              <button
+                onClick={() => handleDelete(editEntry)}
+                className="py-2.5 px-4 rounded-xl bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 font-semibold text-sm border border-red-200 dark:border-red-900/40"
+              >
+                Delete
+              </button>
+              <button
+                onClick={handleEditSubmit}
+                disabled={submitting}
+                className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm disabled:opacity-50"
+              >
+                {submitting ? "Saving…" : "Save changes"}
               </button>
             </div>
           </div>
