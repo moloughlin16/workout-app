@@ -66,10 +66,10 @@ export async function POST(request: NextRequest) {
     }
 
     // ── 3. Fetch this week's training data in parallel ──────────────
-    const [maResult, liftResult, setsResult] = await Promise.all([
+    const [maResult, liftResult, setsResult, cardioResult] = await Promise.all([
       supabase
         .from("martial_arts_sessions")
-        .select("date, discipline, duration_min, notes")
+        .select("date, discipline, duration_min, notes, intensity")
         .gte("date", weekStart)
         .order("date", { ascending: true }),
 
@@ -84,14 +84,26 @@ export async function POST(request: NextRequest) {
         .select("session_id, exercise_name, weight_lb, reps, set_number")
         .gte("created_at", `${weekStart}T00:00:00`)
         .order("set_number", { ascending: true }),
+
+      supabase
+        .from("cardio_sessions")
+        .select("date, activity, duration_min, intensity, notes")
+        .gte("date", weekStart)
+        .order("date", { ascending: true }),
     ]);
 
     const maSessions = maResult.data ?? [];
     const liftSessions = liftResult.data ?? [];
     const liftSets = setsResult.data ?? [];
+    // Cardio table may not exist if migration hasn't run — tolerate that.
+    const cardioSessions = cardioResult.error ? [] : (cardioResult.data ?? []);
 
     // If there's no data at all, don't waste an API call
-    if (maSessions.length === 0 && liftSessions.length === 0) {
+    if (
+      maSessions.length === 0 &&
+      liftSessions.length === 0 &&
+      cardioSessions.length === 0
+    ) {
       return NextResponse.json({
         summary:
           "No training data logged this week yet! Head to the Martial Arts or Lift page to log a session, then come back for your summary.",
@@ -106,6 +118,7 @@ export async function POST(request: NextRequest) {
       trainingData += `### Martial Arts (${maSessions.length} sessions, ${(totalMin / 60).toFixed(1)} hours)\n`;
       for (const s of maSessions) {
         trainingData += `- ${s.date} | ${s.discipline} | ${s.duration_min} min`;
+        if (s.intensity) trainingData += ` | Intensity: ${s.intensity}`;
         if (s.notes) trainingData += ` | Notes: "${s.notes}"`;
         trainingData += "\n";
       }
@@ -151,6 +164,28 @@ export async function POST(request: NextRequest) {
             .join(", ");
           trainingData += `    ${exercise}: ${setDescriptions}\n`;
         }
+      }
+      trainingData += "\n";
+    }
+
+    // Zone 2 cardio
+    if (cardioSessions.length > 0) {
+      const totalCardio = (cardioSessions as Array<{ duration_min: number }>).reduce(
+        (s, r) => s + r.duration_min,
+        0
+      );
+      trainingData += `### Zone 2 Cardio (${cardioSessions.length} sessions, ${totalCardio} min)\n`;
+      for (const c of cardioSessions as Array<{
+        date: string;
+        activity: string;
+        duration_min: number;
+        intensity: string | null;
+        notes: string | null;
+      }>) {
+        trainingData += `- ${c.date} | ${c.activity} | ${c.duration_min} min`;
+        if (c.intensity) trainingData += ` | Intensity: ${c.intensity}`;
+        if (c.notes) trainingData += ` | Notes: "${c.notes}"`;
+        trainingData += "\n";
       }
       trainingData += "\n";
     }

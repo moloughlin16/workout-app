@@ -70,7 +70,13 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
 - [x] **Gym schedule data** — `src/lib/gym-schedule.ts` has the Elevate MMA weekly class schedule transcribed. Exports `GYM_SCHEDULE`, `TRACKABLE_DISCIPLINES`, `DISCIPLINE_COLOR`, `classDurationMin()`.
 - [x] **Schedule planner** (`src/app/schedule/page.tsx`): prev/next-week navigation, day-tab row (Mon–Sun with today highlighted and a green dot when classes are planned), per-class cards with "+ Plan" / "✓ Planned · Remove" toggles, and "✓ I went" one-tap logging for today/past trackable classes. "I went" inserts into `martial_arts_sessions` with `class_name` + `start_time` populated, and deletes the matching `planned_sessions` row if it existed. Yoga/Open Mat can be planned but not quick-logged because they'd violate the `martial_arts_sessions.discipline` check constraint.
 - [x] **Coach message generator** (`src/lib/coach-message.ts` + button on Home page): reads last week's `martial_arts_sessions` and this week's `planned_sessions`, groups by day, and formats a pastable "Hey coach!" message. Copies to clipboard on generation; shown inline in a read-only textarea so the user can double-check before pasting into Instagram.
-- [x] **Bottom nav: 4 tabs** — Home / Schedule / Martial Arts / Lift. Added Schedule in the second slot.
+- [x] **Bottom nav: 4 tabs** — Home / Planner / Martial Arts / Lift. (Earlier there was a separate /schedule tab; the Elevate schedule view is now embedded inside the Martial Arts page as a sub-tab.)
+- [x] **Intensity tracking** — `intensity` column (low/medium/high CHECK constraint) on `martial_arts_sessions` AND `planned_sessions`. UI in `src/components/IntensityPicker.tsx` (3-button selector). Selecting an intensity also tints the whole card with the corresponding light shade (emerald/amber/red) via the `intensityCardClass(value)` helper. When "I went" is tapped on a planned class, its intensity carries forward to the logged martial arts session.
+- [x] **Shared `DateRangeFilter` component** (`src/components/DateRangeFilter.tsx`) — chip row of presets (All time / 30d / 90d / 1y / Custom) plus optional start/end date inputs. Used by both `DisciplinePieChart` and `WeeklyMartialArtsChart`.
+- [x] **Training history line chart** — `WeeklyMartialArtsChart.tsx` rebuilt as a line + area chart (replacing bar). Has an avg-weekly-hours scorecard, total-hours subhead, and auto-switches to monthly aggregation when the visible range exceeds ~6 months (so the "1y" view shows ~12 points instead of 52).
+- [x] **Martial Arts page restructured** — sub-tabs: Sessions / Schedule / Stats / Notes. Big quick-log buttons removed (rarely used in practice); a compact "Log a custom class" form replaces them for off-Elevate training. Schedule tab embeds the Elevate gym schedule. Stats tab holds the history chart + discipline pie. Notes tab holds recent notes, tag cloud, and the Copy-coach-message button.
+- [x] **Home page slimmed** — three scorecard rows (MA hours / lifts / cardio min, each with goal progress bar) and the AI summary card. The pie chart, history chart, tags, coach message, recent notes, and "this week's plan" strip all moved out to other pages.
+- [x] **Planner page** (`src/app/planner/page.tsx`) — vertical stack of day cards (one per day of the visible week), each split into Morning / Afternoon / Evening sub-sections. Auto-aggregates from 5 sources: logged MA (bucketed by start_time), planned MA, logged lifts (default to Morning per user preference), logged cardio (bucketed by start_time), and `weekly_plans` (custom entries with explicit day_part). Tap "+ Add" in any slot to open an overlay sheet with a Cardio / Custom toggle. Cardio entries save to `cardio_sessions` with start_time pre-filled based on the slot (9am/2pm/6pm). Custom entries save to `weekly_plans`.
 
 ### Database schema
 
@@ -107,6 +113,26 @@ A personal workout + martial arts tracking web app (PWA) for the user. Completel
 - created_at
 - indexes: (exercise_name, created_at desc), (session_id)
 - RLS + permissive anon policy
+
+**cardio_sessions**
+- id (uuid pk)
+- date (date, default current_date)
+- activity (text) — "Walking" / "Jogging" / "Biking" / freeform
+- duration_min (int, check > 0)
+- start_time (time, nullable) — pre-filled based on the slot used to add (morning=09:00 / afternoon=14:00 / evening=18:00)
+- intensity (text, check low/medium/high, nullable)
+- notes (text, nullable)
+- RLS + permissive anon policy
+
+**weekly_plans**
+- id (uuid pk)
+- date (date)
+- day_part (text, check morning/afternoon/evening) — explicit, not derived from a time
+- title (text) — short description, e.g. "Rest day", "Stretching"
+- intensity (text, check low/medium/high, nullable)
+- notes (text, nullable)
+- RLS + permissive anon policy
+- For free-form planning that isn't a real workout or class.
 
 **weekly_summaries**
 - id (uuid pk)

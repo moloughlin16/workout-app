@@ -8,10 +8,10 @@ import { usePathname } from "next/navigation";
 const NAV_ITEMS = [
   { href: "/", label: "Home", emoji: "🏠", match: (p: string) => p === "/" },
   {
-    href: "/schedule",
-    label: "Schedule",
-    emoji: "📅",
-    match: (p: string) => p.startsWith("/schedule"),
+    href: "/planner",
+    label: "Planner",
+    emoji: "🗓️",
+    match: (p: string) => p.startsWith("/planner"),
   },
   {
     href: "/martial-arts",

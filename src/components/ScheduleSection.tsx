@@ -1,5 +1,12 @@
 "use client";
 
+// ============================================================
+// SCHEDULE SECTION
+// Embedded view of the Elevate MMA weekly class schedule, with planning
+// and "I went" actions. Originally lived at /schedule as its own page;
+// now embedded inside the Martial Arts page under a sub-tab.
+// ============================================================
+
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
@@ -23,8 +30,6 @@ import IntensityPicker, {
   type Intensity,
 } from "@/components/IntensityPicker";
 
-// Day order used for the tab row and the array-index math below.
-// Monday is index 0 because we treat Monday as start-of-week everywhere.
 const DAYS: DayOfWeek[] = [
   "Monday",
   "Tuesday",
@@ -47,31 +52,32 @@ const DAY_SHORT: Record<DayOfWeek, string> = {
 
 /** Returns index 0–6 (Mon=0 ... Sun=6) for today. */
 function todayDayIndex(): number {
-  const d = new Date().getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  const d = new Date().getDay();
   return d === 0 ? 6 : d - 1;
 }
 
-// Row shape returned from Supabase for `planned_sessions`.
 type PlannedRow = {
   id: string;
   date: string;
-  start_time: string; // "HH:MM:SS"
+  start_time: string;
   end_time: string;
   class_name: string;
   discipline: string;
   intensity: Intensity | null;
 };
 
-/** Normalize a "HH:MM" string to "HH:MM:00" to match Postgres's time format. */
+/** Normalize "HH:MM" to "HH:MM:00" so Postgres time matching is consistent. */
 function toPgTime(t: string): string {
   return t.length === 5 ? `${t}:00` : t;
 }
 
-export default function SchedulePage() {
-  // Monday of the week we're viewing. `addDays(weekStart, 7)` jumps to next week.
-  const [weekStart, setWeekStart] = useState<string>(startOfWeekLocal());
+type Props = {
+  /** Called whenever the user logs attendance, so the parent can refresh its session list. */
+  onAttendanceLogged?: () => void;
+};
 
-  // Default-select today when we're on the current week; otherwise Monday.
+export default function ScheduleSection({ onAttendanceLogged }: Props) {
+  const [weekStart, setWeekStart] = useState<string>(startOfWeekLocal());
   const [selectedDayIdx, setSelectedDayIdx] = useState<number>(() =>
     todayDayIndex()
   );
@@ -89,6 +95,7 @@ export default function SchedulePage() {
 
   useEffect(() => {
     loadPlanned();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart]);
 
   async function loadPlanned() {
@@ -96,7 +103,9 @@ export default function SchedulePage() {
     const endExclusive = addDays(weekStart, 7);
     const { data, error } = await supabase
       .from("planned_sessions")
-      .select("id, date, start_time, end_time, class_name, discipline, intensity")
+      .select(
+        "id, date, start_time, end_time, class_name, discipline, intensity"
+      )
       .gte("date", weekStart)
       .lt("date", endExclusive)
       .order("date", { ascending: true })
@@ -111,7 +120,6 @@ export default function SchedulePage() {
     setLoading(false);
   }
 
-  /** Returns the planned_sessions row matching this class on this date, if any. */
   function findPlanned(cls: GymClass, date: string): PlannedRow | null {
     const wanted = toPgTime(cls.start);
     return (
@@ -146,15 +154,12 @@ export default function SchedulePage() {
       return;
     }
     if (data) {
-      // Prepend to local state so the UI updates without another round trip.
       setPlanned((prev) => [...prev, data as PlannedRow]);
     }
   }
 
-  /** Update the intensity of an existing planned row (or clear it). */
   async function setPlannedIntensity(id: string, intensity: Intensity | null) {
     const previous = planned;
-    // Optimistic — bounce back if the request fails.
     setPlanned((prev) =>
       prev.map((p) => (p.id === id ? { ...p, intensity } : p))
     );
@@ -172,7 +177,6 @@ export default function SchedulePage() {
   async function unplan(id: string) {
     setBusyKey(id);
     setErrorMsg(null);
-    // Optimistic update: drop the row from UI immediately, roll back on error.
     const previous = planned;
     setPlanned((prev) => prev.filter((p) => p.id !== id));
     const { error } = await supabase
@@ -187,21 +191,12 @@ export default function SchedulePage() {
     }
   }
 
-  /**
-   * "I went" — insert a martial_arts_sessions row for this class, and if the
-   * class was planned, delete the planned_sessions row (so it doesn't double
-   * up). Only available for trackable disciplines; the UI hides the button
-   * for yoga/open mat.
-   */
   async function logAttendance(cls: GymClass, date: string) {
     const key = `log-${date}-${cls.start}-${cls.name}`;
     setBusyKey(key);
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    // If this class was previously planned with an intensity, carry that
-    // intensity forward to the actual martial_arts_sessions row so the user
-    // doesn't have to re-pick it post-class.
     const existing = findPlanned(cls, date);
 
     const { error: insertErr } = await supabase
@@ -222,8 +217,6 @@ export default function SchedulePage() {
       return;
     }
 
-    // If the class was planned, clear the plan so the coach message and
-    // "This week's plan" strip reflect reality.
     if (existing) {
       await supabase.from("planned_sessions").delete().eq("id", existing.id);
       setPlanned((prev) => prev.filter((p) => p.id !== existing.id));
@@ -231,11 +224,10 @@ export default function SchedulePage() {
 
     setSuccessMsg(`Logged: ${cls.name}`);
     setBusyKey(null);
-    // Clear the success message after a few seconds.
     setTimeout(() => setSuccessMsg(null), 3000);
+    onAttendanceLogged?.();
   }
 
-  // Totals shown in the day header: "3 planned, 1 attended"
   const plannedThisDay = useMemo(
     () => planned.filter((p) => p.date === selectedDate),
     [planned, selectedDate]
@@ -244,7 +236,6 @@ export default function SchedulePage() {
   const plannedCountByDayIdx = useMemo(() => {
     const counts = new Array(7).fill(0);
     for (const p of planned) {
-      // Count dates relative to weekStart
       const dayDiff = Math.round(
         (new Date(p.date).getTime() - new Date(weekStart).getTime()) /
           (1000 * 60 * 60 * 24)
@@ -255,14 +246,7 @@ export default function SchedulePage() {
   }, [planned, weekStart]);
 
   return (
-    <main className="min-h-screen bg-zinc-50 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 p-6 max-w-md mx-auto pb-24">
-      <header className="py-6">
-        <h1 className="text-3xl font-bold">Schedule</h1>
-        <p className="text-sm text-zinc-500 mt-1">
-          Elevate MMA — plan your classes.
-        </p>
-      </header>
-
+    <div>
       {/* Week navigation */}
       <div className="flex items-center justify-between mb-3 p-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
         <button
@@ -355,9 +339,7 @@ export default function SchedulePage() {
         </span>
       </div>
 
-      {loading && (
-        <p className="text-xs text-zinc-500 mb-2">Loading…</p>
-      )}
+      {loading && <p className="text-xs text-zinc-500 mb-2">Loading…</p>}
 
       {/* Class list for the selected day */}
       {classes.length === 0 ? (
@@ -382,12 +364,9 @@ export default function SchedulePage() {
                   ? `${duration / 60}h`
                   : `${Math.floor(duration / 60)}h ${duration % 60}m`;
 
-            // When planned WITH an intensity, tint the whole card a light
-            // shade of that intensity's color. When planned without, fall
-            // back to the indigo "planned" treatment. Unplanned cards stay
-            // neutral white/zinc.
-            const intensityTint =
-              isPlanned ? intensityCardClass(isPlanned.intensity) : "";
+            const intensityTint = isPlanned
+              ? intensityCardClass(isPlanned.intensity)
+              : "";
             const cardClass = isPlanned
               ? intensityTint ||
                 "bg-indigo-50 dark:bg-indigo-950/30 border-indigo-300 dark:border-indigo-800"
@@ -412,7 +391,6 @@ export default function SchedulePage() {
                 </div>
 
                 <div className="mt-2 flex flex-wrap gap-2 justify-end">
-                  {/* "I went" button — only for today/past and trackable disciplines. */}
                   {(isToday || isPast) && canLog && (
                     <button
                       onClick={() => logAttendance(cls, selectedDate)}
@@ -423,7 +401,6 @@ export default function SchedulePage() {
                     </button>
                   )}
 
-                  {/* Plan / Unplan */}
                   {isPlanned ? (
                     <button
                       onClick={() => unplan(isPlanned.id)}
@@ -443,10 +420,6 @@ export default function SchedulePage() {
                   ) : null}
                 </div>
 
-                {/* Intensity picker — only visible once a class is planned.
-                    Lets you pre-plan a balance of high/medium/low days.
-                    Divider uses a translucent border so it looks fine on
-                    any of the intensity-tinted card backgrounds. */}
                 {isPlanned && (
                   <div className="mt-3 pt-3 border-t border-black/10 dark:border-white/10">
                     <IntensityPicker
@@ -461,10 +434,6 @@ export default function SchedulePage() {
           })}
         </ul>
       )}
-
-      <p className="mt-6 text-center text-xs text-zinc-400">
-        Tap a class to plan it, or tap &quot;I went&quot; after attending.
-      </p>
-    </main>
+    </div>
   );
 }
