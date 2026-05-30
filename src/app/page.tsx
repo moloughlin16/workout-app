@@ -11,6 +11,7 @@ import {
 } from "@/lib/date";
 import { extractTags } from "@/lib/tags";
 import { buildCoachMessage } from "@/lib/coach-message";
+import { intensityDotClass } from "@/components/IntensityPicker";
 import WeeklyMartialArtsChart from "@/components/WeeklyMartialArtsChart";
 import DisciplinePieChart from "@/components/DisciplinePieChart";
 import NoteText from "@/components/NoteText";
@@ -49,6 +50,7 @@ type PlannedRow = {
   start_time: string;
   class_name: string;
   discipline: string;
+  intensity: "low" | "medium" | "high" | null;
 };
 
 export default function HomePage() {
@@ -95,7 +97,7 @@ export default function HomePage() {
     const weekEnd = addDays(weekStart, 7);
     const { data, error } = await supabase
       .from("planned_sessions")
-      .select("id, date, start_time, class_name, discipline")
+      .select("id, date, start_time, class_name, discipline, intensity")
       .gte("date", weekStart)
       .lt("date", weekEnd)
       .order("date", { ascending: true })
@@ -360,11 +362,18 @@ export default function HomePage() {
                 undefined,
                 { weekday: "short" }
               );
+              const dot = intensityDotClass(p.intensity);
               return (
                 <li key={p.id} className="flex items-center gap-2">
                   <span className="text-zinc-500 w-10 flex-shrink-0">
                     {dayShort}
                   </span>
+                  {dot && (
+                    <span
+                      className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${dot}`}
+                      aria-label={`Intensity ${p.intensity}`}
+                    />
+                  )}
                   <span className="font-medium truncate">{p.class_name}</span>
                   <span className="text-zinc-500 ml-auto flex-shrink-0">
                     {formatClockTime(p.start_time)}

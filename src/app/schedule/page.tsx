@@ -18,6 +18,7 @@ import {
   DISCIPLINE_COLOR,
   classDurationMin,
 } from "@/lib/gym-schedule";
+import IntensityPicker, { type Intensity } from "@/components/IntensityPicker";
 
 // Day order used for the tab row and the array-index math below.
 // Monday is index 0 because we treat Monday as start-of-week everywhere.
@@ -55,6 +56,7 @@ type PlannedRow = {
   end_time: string;
   class_name: string;
   discipline: string;
+  intensity: Intensity | null;
 };
 
 /** Normalize a "HH:MM" string to "HH:MM:00" to match Postgres's time format. */
@@ -91,7 +93,7 @@ export default function SchedulePage() {
     const endExclusive = addDays(weekStart, 7);
     const { data, error } = await supabase
       .from("planned_sessions")
-      .select("id, date, start_time, end_time, class_name, discipline")
+      .select("id, date, start_time, end_time, class_name, discipline, intensity")
       .gte("date", weekStart)
       .lt("date", endExclusive)
       .order("date", { ascending: true })
@@ -146,6 +148,24 @@ export default function SchedulePage() {
     }
   }
 
+  /** Update the intensity of an existing planned row (or clear it). */
+  async function setPlannedIntensity(id: string, intensity: Intensity | null) {
+    const previous = planned;
+    // Optimistic — bounce back if the request fails.
+    setPlanned((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, intensity } : p))
+    );
+    const { error } = await supabase
+      .from("planned_sessions")
+      .update({ intensity })
+      .eq("id", id);
+    if (error) {
+      console.error("Set intensity failed:", error.message);
+      setErrorMsg("Couldn't update intensity.");
+      setPlanned(previous);
+    }
+  }
+
   async function unplan(id: string) {
     setBusyKey(id);
     setErrorMsg(null);
@@ -176,6 +196,11 @@ export default function SchedulePage() {
     setErrorMsg(null);
     setSuccessMsg(null);
 
+    // If this class was previously planned with an intensity, carry that
+    // intensity forward to the actual martial_arts_sessions row so the user
+    // doesn't have to re-pick it post-class.
+    const existing = findPlanned(cls, date);
+
     const { error: insertErr } = await supabase
       .from("martial_arts_sessions")
       .insert({
@@ -184,6 +209,7 @@ export default function SchedulePage() {
         duration_min: classDurationMin(cls),
         class_name: cls.name,
         start_time: toPgTime(cls.start),
+        intensity: existing?.intensity ?? null,
       });
 
     if (insertErr) {
@@ -195,7 +221,6 @@ export default function SchedulePage() {
 
     // If the class was planned, clear the plan so the coach message and
     // "This week's plan" strip reflect reality.
-    const existing = findPlanned(cls, date);
     if (existing) {
       await supabase.from("planned_sessions").delete().eq("id", existing.id);
       setPlanned((prev) => prev.filter((p) => p.id !== existing.id));
@@ -408,6 +433,18 @@ export default function SchedulePage() {
                     </button>
                   ) : null}
                 </div>
+
+                {/* Intensity picker — only visible once a class is planned.
+                    Lets you pre-plan a balance of high/medium/low days. */}
+                {isPlanned && (
+                  <div className="mt-3 pt-3 border-t border-indigo-200 dark:border-indigo-900/50">
+                    <IntensityPicker
+                      value={isPlanned.intensity}
+                      onChange={(v) => setPlannedIntensity(isPlanned.id, v)}
+                      label="Planned intensity"
+                    />
+                  </div>
+                )}
               </li>
             );
           })}

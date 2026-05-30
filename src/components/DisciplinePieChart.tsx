@@ -9,7 +9,7 @@ import {
   Tooltip,
 } from "recharts";
 import { supabase } from "@/lib/supabase";
-import { addDays, todayLocal } from "@/lib/date";
+import DateRangeFilter, { type DateRange } from "./DateRangeFilter";
 
 // Map each discipline to a distinct color. We reuse the same palette across
 // the app (e.g. MMA always red) so the visual language stays consistent.
@@ -34,59 +34,28 @@ type Slice = {
   emoji: string;
 };
 
-// Date-range presets shown in the filter row. "all" = no filter (earliest
-// tracked date through today), the rest are rolling windows from today.
-type RangePreset = "all" | "30d" | "90d" | "1y" | "custom";
-
-const PRESETS: { id: RangePreset; label: string }[] = [
-  { id: "all", label: "All time" },
-  { id: "30d", label: "30d" },
-  { id: "90d", label: "90d" },
-  { id: "1y", label: "1y" },
-  { id: "custom", label: "Custom" },
-];
-
 export default function DisciplinePieChart() {
   const [slices, setSlices] = useState<Slice[]>([]);
   const [loading, setLoading] = useState(true);
   const [totalMinutes, setTotalMinutes] = useState(0);
+  const [range, setRange] = useState<DateRange>({ start: null, end: null });
+  // Tracks whether the active filter is "All time" so we can show a
+  // friendlier empty-state message when there's just no data at all.
+  const isAllTime = range.start === null && range.end === null;
 
-  // Filter state.
-  const [preset, setPreset] = useState<RangePreset>("all");
-  // Custom range inputs — only used when preset === "custom".
-  // Default the custom-end to today and the custom-start to 30 days ago
-  // so picking "Custom" gives a useful starting point.
-  const [customStart, setCustomStart] = useState<string>(addDays(todayLocal(), -30));
-  const [customEnd, setCustomEnd] = useState<string>(todayLocal());
-
-  /** Resolves the current filter state to a concrete (start, end) date pair. */
-  function computeRange(): { start: string | null; end: string | null } {
-    if (preset === "all") return { start: null, end: null };
-    if (preset === "custom") {
-      return {
-        start: customStart || null,
-        end: customEnd || null,
-      };
-    }
-    const days = preset === "30d" ? 30 : preset === "90d" ? 90 : 365;
-    return { start: addDays(todayLocal(), -days), end: todayLocal() };
-  }
-
-  // Re-fetch whenever the resolved range changes. We watch the preset and
-  // the custom inputs directly — the resolver is pure so this is safe.
+  // Re-fetch whenever the resolved range changes.
   useEffect(() => {
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preset, customStart, customEnd]);
+  }, [range]);
 
   async function loadData() {
     setLoading(true);
-    const { start, end } = computeRange();
     let query = supabase
       .from("martial_arts_sessions")
       .select("discipline, duration_min, date");
-    if (start) query = query.gte("date", start);
-    if (end) query = query.lte("date", end);
+    if (range.start) query = query.gte("date", range.start);
+    if (range.end) query = query.lte("date", range.end);
 
     const { data, error } = await query;
 
@@ -131,53 +100,15 @@ export default function DisciplinePieChart() {
         </h2>
       </div>
 
-      {/* Preset filter row — horizontally scrollable on tight screens. */}
-      <div className="flex gap-1 mb-3 overflow-x-auto -mx-1 px-1">
-        {PRESETS.map((opt) => {
-          const selected = preset === opt.id;
-          return (
-            <button
-              key={opt.id}
-              onClick={() => setPreset(opt.id)}
-              className={`flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                selected
-                  ? "bg-indigo-600 text-white"
-                  : "bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200 dark:hover:bg-zinc-700"
-              }`}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
+      <div className="mb-3">
+        <DateRangeFilter onChange={setRange} />
       </div>
-
-      {/* Custom range inputs — only expand when "Custom" is active. */}
-      {preset === "custom" && (
-        <div className="flex items-center gap-2 mb-3">
-          <input
-            type="date"
-            value={customStart}
-            max={customEnd || todayLocal()}
-            onChange={(e) => setCustomStart(e.target.value)}
-            className="flex-1 min-w-0 text-xs bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1.5"
-          />
-          <span className="text-xs text-zinc-500">→</span>
-          <input
-            type="date"
-            value={customEnd}
-            min={customStart || undefined}
-            max={todayLocal()}
-            onChange={(e) => setCustomEnd(e.target.value)}
-            className="flex-1 min-w-0 text-xs bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded px-2 py-1.5"
-          />
-        </div>
-      )}
 
       {loading ? (
         <p className="text-xs text-zinc-500">Loading…</p>
       ) : slices.length === 0 ? (
         <p className="text-xs text-zinc-500">
-          {preset === "all"
+          {isAllTime
             ? "Log a martial arts class to see your breakdown."
             : "No classes logged in this range."}
         </p>

@@ -11,6 +11,10 @@ import {
   weekStartFor,
 } from "@/lib/date";
 import NoteText from "@/components/NoteText";
+import IntensityPicker, {
+  IntensityBadge,
+  type Intensity,
+} from "@/components/IntensityPicker";
 
 // The four martial arts disciplines we want to track.
 // `key` is what we store in the database; `label` is what we show on the button.
@@ -32,6 +36,7 @@ type Session = {
   discipline: string;
   duration_min: number;
   notes: string | null;
+  intensity: Intensity | null;
   created_at: string;
 };
 
@@ -66,6 +71,12 @@ export default function MartialArtsPage() {
   const [durationDrafts, setDurationDrafts] = useState<Record<string, string>>(
     {}
   );
+  // Parallel draft state for the per-session intensity picker.
+  // `null` means "no intensity set" (different from undefined which means
+  // "haven't touched the picker for this row yet").
+  const [intensityDrafts, setIntensityDrafts] = useState<
+    Record<string, Intensity | null>
+  >({});
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
 
   // Reload the session list whenever the user navigates to a different week.
@@ -132,6 +143,10 @@ export default function MartialArtsPage() {
       ...curr,
       [session.id]: curr[session.id] ?? String(session.duration_min),
     }));
+    setIntensityDrafts((curr) => ({
+      ...curr,
+      [session.id]: curr[session.id] !== undefined ? curr[session.id] : session.intensity,
+    }));
   }
 
   // Save the editor state: both the note text and the session duration.
@@ -152,22 +167,38 @@ export default function MartialArtsPage() {
         ? parsed
         : previousDuration;
 
+    // Intensity: if the draft has been touched (key exists), use it.
+    // Otherwise keep whatever the row already had.
+    const intensityValue: Intensity | null =
+      id in intensityDrafts
+        ? intensityDrafts[id]
+        : (currentRow?.intensity ?? null);
+
     setSavingNoteId(id);
     setErrorMsg(null);
 
-    // Optimistic update for BOTH fields.
+    // Optimistic update across all three fields.
     const previous = weekSessions;
     setWeekSessions((curr) =>
       curr.map((s) =>
         s.id === id
-          ? { ...s, notes: notesValue, duration_min: durationValue }
+          ? {
+              ...s,
+              notes: notesValue,
+              duration_min: durationValue,
+              intensity: intensityValue,
+            }
           : s
       )
     );
 
     const { error } = await supabase
       .from("martial_arts_sessions")
-      .update({ notes: notesValue, duration_min: durationValue })
+      .update({
+        notes: notesValue,
+        duration_min: durationValue,
+        intensity: intensityValue,
+      })
       .eq("id", id);
 
     if (error) {
@@ -400,9 +431,12 @@ export default function MartialArtsPage() {
                         <div className="text-sm font-semibold truncate">
                           {s.discipline}
                         </div>
-                        <div className="text-xs text-zinc-500">
-                          {relativeLabel(s.date)} · {s.duration_min} min
-                          {hasNote && " · 📝"}
+                        <div className="text-xs text-zinc-500 flex items-center gap-1.5 flex-wrap">
+                          <span>
+                            {relativeLabel(s.date)} · {s.duration_min} min
+                            {hasNote && " · 📝"}
+                          </span>
+                          <IntensityBadge value={s.intensity} />
                         </div>
                         {hasNote && !isExpanded && (
                           <div className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 line-clamp-2 whitespace-pre-wrap">
@@ -423,7 +457,7 @@ export default function MartialArtsPage() {
                   {isExpanded && (
                     <div className="px-3 pb-3 border-t border-zinc-100 dark:border-zinc-800 pt-3">
                       {/* Duration input row */}
-                      <div className="flex items-center gap-2 mb-2">
+                      <div className="flex items-center gap-2 mb-3">
                         <label
                           htmlFor={`duration-${s.id}`}
                           className="text-xs text-zinc-500"
@@ -446,6 +480,22 @@ export default function MartialArtsPage() {
                           className="w-16 text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         />
                         <span className="text-xs text-zinc-500">min</span>
+                      </div>
+                      {/* Intensity selector */}
+                      <div className="mb-3">
+                        <IntensityPicker
+                          value={
+                            (intensityDrafts[s.id] !== undefined
+                              ? intensityDrafts[s.id]
+                              : s.intensity) ?? null
+                          }
+                          onChange={(v) =>
+                            setIntensityDrafts((curr) => ({
+                              ...curr,
+                              [s.id]: v,
+                            }))
+                          }
+                        />
                       </div>
                       <textarea
                         value={noteDrafts[s.id] ?? ""}
