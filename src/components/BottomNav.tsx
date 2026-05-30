@@ -15,7 +15,7 @@ const NAV_ITEMS = [
   },
   {
     href: "/martial-arts",
-    label: "Martial Arts",
+    label: "Martial",
     emoji: "🥋",
     match: (p: string) => p.startsWith("/martial-arts"),
   },
@@ -25,6 +25,12 @@ const NAV_ITEMS = [
     emoji: "🏋️",
     match: (p: string) => p.startsWith("/lift"),
   },
+  {
+    href: "/coach",
+    label: "Coach",
+    emoji: "🧠",
+    match: (p: string) => p.startsWith("/coach"),
+  },
 ] as const;
 
 export default function BottomNav() {
@@ -33,7 +39,7 @@ export default function BottomNav() {
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-zinc-200 dark:border-zinc-800 bg-white/90 dark:bg-zinc-950/90 backdrop-blur-md">
-      <div className="max-w-md mx-auto grid grid-cols-4">
+      <div className="max-w-md mx-auto grid grid-cols-5">
         {NAV_ITEMS.map((item) => {
           const active = item.match(pathname);
           return (
