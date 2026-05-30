@@ -29,6 +29,13 @@ import IntensityPicker, {
   intensityCardClass,
   type Intensity,
 } from "@/components/IntensityPicker";
+import {
+  GYM_SCHEDULE,
+  classDurationMin,
+  DISCIPLINE_COLOR,
+  type DayOfWeek,
+  type GymClass,
+} from "@/lib/gym-schedule";
 
 type DayPart = "morning" | "afternoon" | "evening";
 
@@ -83,6 +90,42 @@ function defaultStartTimeForSlot(slot: DayPart): string {
   return "18:00";
 }
 
+// Time windows for picking Elevate classes when adding an MA entry from
+// a particular slot. These are intentionally narrower than the general
+// time-bucketing rules — they match the times of day the user actually
+// trains (before-work / lunch / after-work). Classes outside these
+// windows can still be logged via the "Custom" toggle.
+const CLASS_PICK_WINDOWS: Record<DayPart, { start: string; end: string }> = {
+  morning: { start: "07:30", end: "08:30" },
+  afternoon: { start: "11:00", end: "14:00" },
+  evening: { start: "16:30", end: "23:59" },
+};
+
+const DAY_NAMES: DayOfWeek[] = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+/** Returns the gym-schedule DayOfWeek for a YYYY-MM-DD date string. */
+function dayOfWeekFor(dateStr: string): DayOfWeek {
+  const [yyyy, mm, dd] = dateStr.split("-").map(Number);
+  return DAY_NAMES[new Date(yyyy, mm - 1, dd).getDay()];
+}
+
+/** Classes from the gym schedule that fall inside this slot's window. */
+function classesForSlot(date: string, slot: DayPart): GymClass[] {
+  const day = dayOfWeekFor(date);
+  const win = CLASS_PICK_WINDOWS[slot];
+  return GYM_SCHEDULE[day].filter(
+    (c) => c.start >= win.start && c.start <= win.end
+  );
+}
+
 /** Common Zone 2 cardio activities — used as quick-pick buttons. */
 const CARDIO_PRESETS = ["Walking", "Jogging", "Biking"];
 
@@ -101,7 +144,13 @@ export default function PlannerPage() {
     "ma"
   );
 
-  // MA form fields
+  // MA form fields. Two modes:
+  //   - Pick from this slot's Elevate classes (default; uses maSelectedClass)
+  //   - Custom (free-form discipline + name + duration; via the toggle)
+  const [maSelectedClass, setMaSelectedClass] = useState<GymClass | null>(
+    null
+  );
+  const [maCustomMode, setMaCustomMode] = useState<boolean>(false);
   const [maDiscipline, setMaDiscipline] = useState<string>("MMA");
   const [maClassName, setMaClassName] = useState<string>("");
   const [maDuration, setMaDuration] = useState<string>("60");
@@ -282,7 +331,11 @@ export default function PlannerPage() {
   function openAddForm(target: AddTarget) {
     setAddTarget(target);
     setAddType("ma");
-    // MA defaults
+    // MA defaults — start in pick-from-list mode unless this slot has no
+    // matching Elevate classes (then drop straight into custom mode).
+    const available = classesForSlot(target.date, target.dayPart);
+    setMaSelectedClass(null);
+    setMaCustomMode(available.length === 0);
     setMaDiscipline("MMA");
     setMaClassName("");
     setMaDuration("60");
@@ -313,22 +366,58 @@ export default function PlannerPage() {
     setErrorMsg(null);
 
     if (addType === "ma") {
-      // MA form. Routes to planned_sessions for future dates, or directly
-      // to martial_arts_sessions for today/past — matches the Schedule
-      // tab's "Plan vs I went" semantics. Discipline is required; the
-      // class_name field is optional and falls back to the discipline.
-      const dur = parseInt(maDuration, 10);
-      if (!Number.isFinite(dur) || dur <= 0) {
-        setErrorMsg("Duration must be a positive number.");
+      // MA form. Two source modes:
+      //   - Pick from this slot's Elevate classes (uses the GymClass's
+      //     own start/end/name/discipline; duration computed from class).
+      //   - Custom (free-form discipline + duration; start_time defaults
+      //     to a per-slot value).
+      // Routes to planned_sessions when the date is in the future, or to
+      // martial_arts_sessions for today/past (matches the Schedule tab's
+      // Plan vs I-went semantics).
+      let className: string;
+      let discipline: string;
+      let startTime: string;
+      let dur: number;
+
+      if (!maCustomMode && maSelectedClass) {
+        className = maSelectedClass.name;
+        discipline = maSelectedClass.discipline;
+        startTime = `${maSelectedClass.start}:00`;
+        dur = classDurationMin(maSelectedClass);
+      } else if (maCustomMode) {
+        dur = parseInt(maDuration, 10);
+        if (!Number.isFinite(dur) || dur <= 0) {
+          setErrorMsg("Duration must be a positive number.");
+          setSubmitting(false);
+          return;
+        }
+        className = maClassName.trim() || maDiscipline;
+        discipline = maDiscipline;
+        startTime = defaultStartTimeForSlot(addTarget.dayPart);
+      } else {
+        setErrorMsg("Pick a class or switch to Custom.");
         setSubmitting(false);
         return;
       }
-      const startTime = defaultStartTimeForSlot(addTarget.dayPart);
-      const className = maClassName.trim() || maDiscipline;
+
+      // Yoga / Open Mat use "Other" discipline — that's allowed in
+      // planned_sessions but rejected by martial_arts_sessions's CHECK
+      // constraint. Block logging "Other" disciplines today/past with a
+      // clear error message instead of letting the DB reject it.
       const isFuture = addTarget.date > todayLocal();
+      const isTrackable = ["MMA", "Kickboxing", "Grappling", "Sparring"].includes(
+        discipline
+      );
+      if (!isFuture && !isTrackable) {
+        setErrorMsg(
+          `${className} isn't a trackable martial arts discipline. Plan it for a future date or add as Custom.`
+        );
+        setSubmitting(false);
+        return;
+      }
+
       if (isFuture) {
         // Compute end_time = start_time + dur minutes for planned_sessions.
-        // Hours/minutes math is small enough to inline.
         const [sh, sm] = startTime.split(":").map(Number);
         const totalMin = sh * 60 + sm + dur;
         const eh = Math.floor(totalMin / 60) % 24;
@@ -339,7 +428,7 @@ export default function PlannerPage() {
           start_time: startTime,
           end_time: endTime,
           class_name: className,
-          discipline: maDiscipline,
+          discipline,
           intensity: maIntensity,
         });
         if (error) {
@@ -351,7 +440,7 @@ export default function PlannerPage() {
       } else {
         const { error } = await supabase.from("martial_arts_sessions").insert({
           date: addTarget.date,
-          discipline: maDiscipline,
+          discipline,
           duration_min: dur,
           class_name: className,
           start_time: startTime,
@@ -654,62 +743,146 @@ export default function PlannerPage() {
               ))}
             </div>
 
-            {addType === "ma" && (
+            {addType === "ma" && addTarget && (
               <div className="space-y-3">
-                {/* Discipline pills */}
-                <div>
-                  <label className="text-xs font-medium text-zinc-500 mb-1.5 block">
-                    Discipline
-                  </label>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {(
-                      [
-                        { key: "MMA", label: "🥋 MMA" },
-                        { key: "Kickboxing", label: "🥊 Kickboxing" },
-                        { key: "Grappling", label: "🤼 Grappling" },
-                        { key: "Sparring", label: "⚡ Sparring" },
-                      ] as const
-                    ).map((d) => (
-                      <button
-                        key={d.key}
-                        onClick={() => setMaDiscipline(d.key)}
-                        className={`py-2 rounded-lg text-xs font-semibold border-2 ${
-                          maDiscipline === d.key
-                            ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300"
-                            : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400"
-                        }`}
-                      >
-                        {d.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <input
-                  type="text"
-                  value={maClassName}
-                  onChange={(e) => setMaClassName(e.target.value)}
-                  placeholder="Class name (optional, e.g. NoGi BJJ)"
-                  className="w-full text-sm px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
-                />
-                <div className="flex items-center gap-2">
-                  <label className="text-xs font-medium text-zinc-500">
-                    Duration
-                  </label>
-                  <input
-                    type="number"
-                    inputMode="numeric"
-                    min={1}
-                    value={maDuration}
-                    onChange={(e) => setMaDuration(e.target.value)}
-                    className="w-16 text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
-                  />
-                  <span className="text-xs text-zinc-500">min</span>
-                  {addTarget && addTarget.date > todayLocal() && (
-                    <span className="ml-auto text-[10px] text-amber-600 dark:text-amber-400 font-medium">
-                      Will save as planned
-                    </span>
-                  )}
-                </div>
+                {!maCustomMode && (
+                  <>
+                    {/* Class list filtered by the slot's window */}
+                    {(() => {
+                      const available = classesForSlot(
+                        addTarget.date,
+                        addTarget.dayPart
+                      );
+                      const win = CLASS_PICK_WINDOWS[addTarget.dayPart];
+                      if (available.length === 0) {
+                        return (
+                          <div className="p-3 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-xs text-zinc-600 dark:text-zinc-400">
+                            No Elevate classes scheduled between{" "}
+                            {win.start} and {win.end} on this day.
+                            <button
+                              onClick={() => setMaCustomMode(true)}
+                              className="block mt-1.5 text-indigo-600 dark:text-indigo-400 font-medium"
+                            >
+                              Add a custom class instead →
+                            </button>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div>
+                          <label className="text-xs font-medium text-zinc-500 mb-1.5 block">
+                            Pick a class
+                          </label>
+                          <ul className="space-y-1.5">
+                            {available.map((cls) => {
+                              const isSelected =
+                                maSelectedClass?.name === cls.name &&
+                                maSelectedClass?.start === cls.start;
+                              return (
+                                <li key={`${cls.start}-${cls.name}`}>
+                                  <button
+                                    onClick={() => setMaSelectedClass(cls)}
+                                    className={`w-full flex items-center gap-2 p-2.5 rounded-lg border-2 text-left transition-colors ${
+                                      isSelected
+                                        ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30"
+                                        : "border-zinc-200 dark:border-zinc-800 hover:bg-zinc-50 dark:hover:bg-zinc-950"
+                                    }`}
+                                  >
+                                    <span
+                                      className={`inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 ${DISCIPLINE_COLOR[cls.discipline]}`}
+                                    />
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-sm font-semibold truncate">
+                                        {cls.name}
+                                      </div>
+                                      <div className="text-[11px] text-zinc-500">
+                                        {cls.start}–{cls.end} ·{" "}
+                                        {classDurationMin(cls)}m
+                                      </div>
+                                    </div>
+                                  </button>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      );
+                    })()}
+
+                    <button
+                      onClick={() => setMaCustomMode(true)}
+                      className="w-full text-xs text-indigo-600 dark:text-indigo-400 font-medium py-1"
+                    >
+                      Or enter a custom class →
+                    </button>
+                  </>
+                )}
+
+                {maCustomMode && (
+                  <>
+                    <button
+                      onClick={() => setMaCustomMode(false)}
+                      className="text-xs text-indigo-600 dark:text-indigo-400 font-medium"
+                    >
+                      ← Back to class list
+                    </button>
+                    <div>
+                      <label className="text-xs font-medium text-zinc-500 mb-1.5 block">
+                        Discipline
+                      </label>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {(
+                          [
+                            { key: "MMA", label: "🥋 MMA" },
+                            { key: "Kickboxing", label: "🥊 Kickboxing" },
+                            { key: "Grappling", label: "🤼 Grappling" },
+                            { key: "Sparring", label: "⚡ Sparring" },
+                          ] as const
+                        ).map((d) => (
+                          <button
+                            key={d.key}
+                            onClick={() => setMaDiscipline(d.key)}
+                            className={`py-2 rounded-lg text-xs font-semibold border-2 ${
+                              maDiscipline === d.key
+                                ? "border-indigo-500 bg-indigo-50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300"
+                                : "border-zinc-200 dark:border-zinc-800 text-zinc-600 dark:text-zinc-400"
+                            }`}
+                          >
+                            {d.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <input
+                      type="text"
+                      value={maClassName}
+                      onChange={(e) => setMaClassName(e.target.value)}
+                      placeholder="Class name (optional, e.g. NoGi BJJ)"
+                      className="w-full text-sm px-2 py-1.5 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                    />
+                    <div className="flex items-center gap-2">
+                      <label className="text-xs font-medium text-zinc-500">
+                        Duration
+                      </label>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        value={maDuration}
+                        onChange={(e) => setMaDuration(e.target.value)}
+                        className="w-16 text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                      />
+                      <span className="text-xs text-zinc-500">min</span>
+                    </div>
+                  </>
+                )}
+
+                {addTarget.date > todayLocal() && (
+                  <p className="text-[10px] text-amber-600 dark:text-amber-400 font-medium">
+                    Future date — will save as a planned class.
+                  </p>
+                )}
+
                 <IntensityPicker value={maIntensity} onChange={setMaIntensity} />
                 <textarea
                   value={maNotes}
