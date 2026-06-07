@@ -17,6 +17,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
   addDays,
@@ -57,6 +58,13 @@ type Entry = {
   notes?: string | null;
   startTime?: string | null;
   durationMin?: number;
+  // True when this entry is considered "done":
+  //   - ma:         always (the row IS the log)
+  //   - ma_planned: never (it's a plan)
+  //   - lift:       has at least one set row
+  //   - cardio:     completed_at IS NOT NULL
+  //   - custom:     completed_at IS NOT NULL
+  isCompleted: boolean;
 };
 
 const DAYS_LABEL: { short: string; full: string }[] = [
@@ -223,6 +231,22 @@ export default function PlannerPage() {
   // same clearly-worded confirm rather than an easy-to-misfire inline ×).
   const [actionEntry, setActionEntry] = useState<Entry | null>(null);
 
+  // ── Complete (checkbox) modal state ─────────────────────────────────
+  // Opens when the user taps an unchecked checkbox. Form fields vary by
+  // entry type:
+  //   - ma_planned: intensity + notes → convert to martial_arts_sessions
+  //   - cardio:     duration + intensity (+ notes) → set completed_at
+  //   - custom:     intensity (+ notes) → set completed_at
+  //   - lift:       NO modal — we navigate straight to /lift instead.
+  const [completeEntry, setCompleteEntry] = useState<Entry | null>(null);
+  const [cIntensity, setCIntensity] = useState<Intensity | null>(null);
+  const [cNotes, setCNotes] = useState<string>("");
+  const [cDuration, setCDuration] = useState<string>("");
+  const [submittingComplete, setSubmittingComplete] = useState(false);
+
+  // Router for navigating to /lift when the user checks off a lift.
+  const router = useRouter();
+
   useEffect(() => {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -256,13 +280,13 @@ export default function PlannerPage() {
   // Restoring on unmount handles the case where the user navigates away
   // mid-sheet (rare, but safer).
   useEffect(() => {
-    if (!addTarget && !editEntry && !actionEntry) return;
+    if (!addTarget && !editEntry && !actionEntry && !completeEntry) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = prev;
     };
-  }, [addTarget, editEntry, actionEntry]);
+  }, [addTarget, editEntry, actionEntry, completeEntry]);
 
   async function loadAll() {
     setLoading(true);
@@ -284,21 +308,56 @@ export default function PlannerPage() {
         .gte("date", weekStart)
         .lt("date", weekEnd),
       supabase
+        // lift_sets(count) joins the count of related sets — drives
+        // the "completed" state for lifts. > 0 sets ⇒ done.
         .from("lift_sessions")
-        .select("id, date, template_name, start_time, intensity")
+        .select("id, date, template_name, start_time, intensity, lift_sets(count)")
         .gte("date", weekStart)
         .lt("date", weekEnd),
       supabase
+        // completed_at may not exist yet (migration not run). When the
+        // column is missing PostgREST errors the whole query — we fall
+        // back to a query without it in the catch path below.
         .from("cardio_sessions")
-        .select("id, date, activity, duration_min, start_time, intensity, notes")
+        .select("id, date, activity, duration_min, start_time, intensity, notes, completed_at")
         .gte("date", weekStart)
         .lt("date", weekEnd),
       supabase
         .from("weekly_plans")
-        .select("id, date, day_part, title, intensity, notes")
+        .select("id, date, day_part, title, intensity, notes, completed_at")
         .gte("date", weekStart)
         .lt("date", weekEnd),
     ]);
+
+    // Fallback path: if the completed_at column is missing on either
+    // table, retry without it so the planner doesn't break for users
+    // who haven't run the migration yet. Typed as Record<string, unknown>
+    // because the retry path's row shape lacks completed_at — we just
+    // pass it through to the loops below which use `r.completed_at` with
+    // the optional-property type guard.
+    type AnyRow = Record<string, unknown>;
+    let cardioData: AnyRow[] | null = cardioRes.error
+      ? null
+      : (cardioRes.data as unknown as AnyRow[] | null);
+    if (cardioRes.error && /completed_at/i.test(cardioRes.error.message ?? "")) {
+      const retry = await supabase
+        .from("cardio_sessions")
+        .select("id, date, activity, duration_min, start_time, intensity, notes")
+        .gte("date", weekStart)
+        .lt("date", weekEnd);
+      cardioData = retry.error ? null : (retry.data as unknown as AnyRow[] | null);
+    }
+    let plansData: AnyRow[] | null = plansRes.error
+      ? null
+      : (plansRes.data as unknown as AnyRow[] | null);
+    if (plansRes.error && /completed_at/i.test(plansRes.error.message ?? "")) {
+      const retry = await supabase
+        .from("weekly_plans")
+        .select("id, date, day_part, title, intensity, notes")
+        .gte("date", weekStart)
+        .lt("date", weekEnd);
+      plansData = retry.error ? null : (retry.data as unknown as AnyRow[] | null);
+    }
 
     const out: Entry[] = [];
 
@@ -321,6 +380,7 @@ export default function PlannerPage() {
         subtitle: `${r.duration_min}m${r.start_time ? ` · ${formatClockTime(r.start_time)}` : ""}`,
         emoji: "🥋",
         intensity: r.intensity,
+        isCompleted: true, // logged MA always counts as done
       });
     }
 
@@ -341,79 +401,85 @@ export default function PlannerPage() {
         subtitle: `Planned · ${formatClockTime(r.start_time)}`,
         emoji: "📅",
         intensity: r.intensity,
+        isCompleted: false, // a planned row is a plan, not a log
       });
     }
 
     // Lifts — bucket by start_time if the planner set one; otherwise default
     // to morning (matches lifts logged from the Lift tab, which have no time).
+    // Completion is derived from `lift_sets(count)` — a session with at least
+    // one set row is considered done; an empty one is a placeholder.
     for (const r of (liftRes.data ?? []) as Array<{
       id: string;
       date: string;
       template_name: string;
       start_time: string | null;
       intensity: Intensity | null;
+      lift_sets?: { count: number }[];
     }>) {
+      const setCount = r.lift_sets?.[0]?.count ?? 0;
       out.push({
         id: `lift-${r.id}`,
         source: "lift",
         date: r.date,
         day_part: bucketByTime(r.start_time, "morning"),
         title: r.template_name,
-        subtitle: "Lift session",
+        subtitle: setCount > 0 ? `${setCount} sets` : "No sets yet",
         emoji: "🏋️",
         intensity: r.intensity,
+        isCompleted: setCount > 0,
       });
     }
 
     // Cardio
-    if (!cardioRes.error) {
-      for (const r of (cardioRes.data ?? []) as Array<{
-        id: string;
-        date: string;
-        activity: string;
-        duration_min: number;
-        start_time: string | null;
-        intensity: Intensity | null;
-        notes: string | null;
-      }>) {
-        out.push({
-          id: `cardio-${r.id}`,
-          source: "cardio",
-          date: r.date,
-          day_part: bucketByTime(r.start_time, "morning"),
-          title: r.activity,
-          subtitle: `${r.duration_min}m${r.start_time ? ` · ${formatClockTime(r.start_time)}` : ""}`,
-          emoji: "🚶",
-          intensity: r.intensity,
-          notes: r.notes,
-          startTime: r.start_time,
-          durationMin: r.duration_min,
-        });
-      }
+    for (const r of (cardioData ?? []) as Array<{
+      id: string;
+      date: string;
+      activity: string;
+      duration_min: number;
+      start_time: string | null;
+      intensity: Intensity | null;
+      notes: string | null;
+      completed_at?: string | null;
+    }>) {
+      out.push({
+        id: `cardio-${r.id}`,
+        source: "cardio",
+        date: r.date,
+        day_part: bucketByTime(r.start_time, "morning"),
+        title: r.activity,
+        subtitle: `${r.duration_min}m${r.start_time ? ` · ${formatClockTime(r.start_time)}` : ""}`,
+        emoji: "🚶",
+        intensity: r.intensity,
+        notes: r.notes,
+        startTime: r.start_time,
+        durationMin: r.duration_min,
+        isCompleted: !!r.completed_at,
+      });
     }
 
     // Custom plans
-    if (!plansRes.error) {
-      for (const r of (plansRes.data ?? []) as Array<{
-        id: string;
-        date: string;
-        day_part: DayPart;
-        title: string;
-        intensity: Intensity | null;
-        notes: string | null;
-      }>) {
-        out.push({
-          id: `plan-${r.id}`,
-          source: "custom",
-          date: r.date,
-          day_part: r.day_part,
-          title: r.title,
-          subtitle: "Custom",
-          emoji: "📝",
-          intensity: r.intensity,
-          notes: r.notes,
-        });
-      }
+    for (const r of (plansData ?? []) as Array<{
+      id: string;
+      date: string;
+      day_part: DayPart;
+      title: string;
+      intensity: Intensity | null;
+      notes: string | null;
+      completed_at?: string | null;
+    }>) {
+      out.push({
+        id: `plan-${r.id}`,
+        source: "custom",
+        date: r.date,
+        day_part: r.day_part,
+        title: r.title,
+        subtitle: "Custom",
+        emoji: "📝",
+        intensity: r.intensity,
+        notes: r.notes,
+        isCompleted: !!r.completed_at,
+      });
     }
 
     setEntries(out);
@@ -637,6 +703,138 @@ export default function PlannerPage() {
 
   function closeEditForm() {
     setEditEntry(null);
+  }
+
+  /**
+   * Called when the user taps an unchecked checkbox on an entry.
+   * Routes by entry source — most types open a confirm modal first, lifts
+   * navigate straight to /lift to fill in sets.
+   */
+  function openCheck(entry: Entry) {
+    if (entry.isCompleted) return; // unchecking not supported in v1
+    if (entry.source === "lift") {
+      // Take the user to /lift; the empty session is at the top of
+      // Recent Sessions there for them to open and enter sets.
+      router.push("/lift");
+      return;
+    }
+    if (
+      entry.source === "ma_planned" ||
+      entry.source === "cardio" ||
+      entry.source === "custom"
+    ) {
+      // Pre-fill the modal with whatever was already on the entry so the
+      // user can confirm-or-adjust in a single tap.
+      setCompleteEntry(entry);
+      setCIntensity(entry.intensity);
+      setCNotes(entry.notes ?? "");
+      setCDuration(entry.durationMin != null ? String(entry.durationMin) : "");
+    }
+  }
+
+  function closeCompleteModal() {
+    setCompleteEntry(null);
+  }
+
+  /** Run the right "mark complete" action for the modal's entry type. */
+  async function handleCompleteSubmit() {
+    if (!completeEntry) return;
+    setSubmittingComplete(true);
+    setErrorMsg(null);
+    const realId = completeEntry.id.split("-").slice(1).join("-");
+
+    if (completeEntry.source === "ma_planned") {
+      // "I went" equivalent: fetch the planned row, insert a logged
+      // martial_arts_sessions row with the same details + the confirmed
+      // intensity + notes, then delete the planned row.
+      const { data: planned, error: fetchErr } = await supabase
+        .from("planned_sessions")
+        .select("date, start_time, end_time, class_name, discipline")
+        .eq("id", realId)
+        .single();
+      if (fetchErr || !planned) {
+        setErrorMsg("Couldn't load the planned class.");
+        setSubmittingComplete(false);
+        return;
+      }
+      const [sh, sm] = planned.start_time.split(":").map(Number);
+      const [eh, em] = planned.end_time.split(":").map(Number);
+      const dur = eh * 60 + em - (sh * 60 + sm);
+      // martial_arts_sessions discipline CHECK only accepts the 4
+      // trackable disciplines; if a planned "Other" (yoga etc) ever
+      // sneaks in, bail with a clear error rather than a DB rejection.
+      if (
+        !["MMA", "Kickboxing", "Grappling", "Sparring"].includes(
+          planned.discipline
+        )
+      ) {
+        setErrorMsg(
+          `${planned.class_name} (${planned.discipline}) isn't a trackable martial arts discipline.`
+        );
+        setSubmittingComplete(false);
+        return;
+      }
+      const { error: insertErr } = await supabase
+        .from("martial_arts_sessions")
+        .insert({
+          date: planned.date,
+          discipline: planned.discipline,
+          duration_min: dur,
+          class_name: planned.class_name,
+          start_time: planned.start_time,
+          intensity: cIntensity,
+          notes: cNotes.trim() || null,
+        });
+      if (insertErr) {
+        console.error("Mark MA complete failed:", insertErr.message);
+        setErrorMsg(`Couldn't log that class: ${insertErr.message}`);
+        setSubmittingComplete(false);
+        return;
+      }
+      // Best-effort cleanup of the planned row.
+      await supabase.from("planned_sessions").delete().eq("id", realId);
+    } else if (completeEntry.source === "cardio") {
+      const dur = parseInt(cDuration, 10);
+      if (!Number.isFinite(dur) || dur <= 0) {
+        setErrorMsg("Duration must be a positive number.");
+        setSubmittingComplete(false);
+        return;
+      }
+      const { error } = await supabase
+        .from("cardio_sessions")
+        .update({
+          duration_min: dur,
+          intensity: cIntensity,
+          notes: cNotes.trim() || null,
+          completed_at: new Date().toISOString(),
+        })
+        .eq("id", realId);
+      if (error) {
+        console.error("Mark cardio complete failed:", error.message);
+        setErrorMsg(`Couldn't update: ${error.message}`);
+        setSubmittingComplete(false);
+        return;
+      }
+    } else if (completeEntry.source === "custom") {
+      const { error } = await supabase
+        .from("weekly_plans")
+        .update({
+          intensity: cIntensity,
+          notes: cNotes.trim() || null,
+          completed_at: new Date().toISOString(),
+        })
+        .eq("id", realId);
+      if (error) {
+        console.error("Mark custom complete failed:", error.message);
+        setErrorMsg(`Couldn't update: ${error.message}`);
+        setSubmittingComplete(false);
+        return;
+      }
+    }
+
+    setSubmittingComplete(false);
+    closeCompleteModal();
+    loadAll();
   }
 
   async function handleEditSubmit() {
@@ -912,41 +1110,76 @@ export default function PlannerPage() {
                           const isPlanned = e.source === "ma_planned";
                           // cardio + custom open the full edit sheet inline.
                           // ma / ma_planned / lift open a lightweight action
-                          // sheet (open-in-page or delete) — they're edited on
-                          // their own page, but can now be deleted from here.
+                          // sheet (open-in-page or delete).
                           const editable =
                             e.source === "cardio" || e.source === "custom";
-                          const cls = `w-full text-left flex items-start gap-2 p-2 rounded-lg border ${cardClass} ${isPlanned ? "border-dashed" : ""} active:scale-[0.99] transition-transform`;
-                          const inner = (
-                            <>
-                              <span className="text-base flex-shrink-0">
-                                {e.emoji}
-                              </span>
-                              <div className="flex-1 min-w-0">
-                                <div className="text-sm font-semibold truncate">
-                                  {e.title}
-                                </div>
-                                <div className="text-[11px] text-zinc-500 flex items-center gap-1.5 flex-wrap">
-                                  {e.subtitle && <span>{e.subtitle}</span>}
-                                  <IntensityBadge value={e.intensity} />
-                                </div>
-                              </div>
-                              <span className="text-zinc-400 text-sm flex-shrink-0 self-center">
-                                ›
-                              </span>
-                            </>
-                          );
                           return (
-                            <li key={e.id}>
+                            <li
+                              key={e.id}
+                              className={`flex items-stretch gap-2 p-2 rounded-lg border ${cardClass} ${isPlanned ? "border-dashed" : ""}`}
+                            >
+                              {/* Checkbox: tap to mark complete. Already-
+                                  completed entries show as filled and tap is
+                                  a no-op (un-check not supported in v1). */}
+                              <button
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  openCheck(e);
+                                }}
+                                disabled={e.isCompleted}
+                                aria-label={
+                                  e.isCompleted ? "Completed" : "Mark complete"
+                                }
+                                className={`flex-shrink-0 self-center w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${
+                                  e.isCompleted
+                                    ? "bg-indigo-600 border-indigo-600 text-white"
+                                    : "bg-transparent border-zinc-400 dark:border-zinc-600 hover:border-indigo-500 active:scale-95"
+                                }`}
+                              >
+                                {e.isCompleted && (
+                                  <svg
+                                    viewBox="0 0 16 16"
+                                    fill="none"
+                                    className="w-3.5 h-3.5"
+                                  >
+                                    <path
+                                      d="M3.5 8.5l3 3 6-6.5"
+                                      stroke="currentColor"
+                                      strokeWidth="2.5"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                )}
+                              </button>
+                              {/* Tap the rest of the row to edit. */}
                               <button
                                 onClick={() =>
                                   editable
                                     ? openEditEntry(e)
                                     : setActionEntry(e)
                                 }
-                                className={cls}
+                                className={`flex-1 min-w-0 text-left flex items-start gap-2 active:scale-[0.99] transition-transform ${
+                                  e.isCompleted ? "" : ""
+                                }`}
                               >
-                                {inner}
+                                <span className="text-base flex-shrink-0">
+                                  {e.emoji}
+                                </span>
+                                <div className="flex-1 min-w-0">
+                                  <div
+                                    className={`text-sm font-semibold truncate ${e.isCompleted ? "line-through text-zinc-500 dark:text-zinc-400" : ""}`}
+                                  >
+                                    {e.title}
+                                  </div>
+                                  <div className="text-[11px] text-zinc-500 flex items-center gap-1.5 flex-wrap">
+                                    {e.subtitle && <span>{e.subtitle}</span>}
+                                    <IntensityBadge value={e.intensity} />
+                                  </div>
+                                </div>
+                                <span className="text-zinc-400 text-sm flex-shrink-0 self-center">
+                                  ›
+                                </span>
                               </button>
                             </li>
                           );
@@ -1512,6 +1745,96 @@ export default function PlannerPage() {
                 className="w-full py-2.5 rounded-xl bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400 font-semibold text-sm border border-red-200 dark:border-red-900/40"
               >
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Complete (check-off) modal.
+          Different fields per source — MA planned needs intensity + notes,
+          cardio needs duration + intensity + notes, custom needs intensity
+          + notes. Submit converts/updates the right table and marks done. */}
+      {completeEntry && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/50 flex items-end sm:items-center justify-center"
+          onClick={closeCompleteModal}
+        >
+          <div
+            className="w-full max-w-md bg-white dark:bg-zinc-900 sm:rounded-2xl rounded-t-2xl sm:border border-t border-zinc-200 dark:border-zinc-800 shadow-xl flex flex-col"
+            style={{ maxHeight: "min(85vh, 720px)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-5 pb-3 flex-shrink-0">
+              <h3 className="text-base font-bold">
+                Mark complete:{" "}
+                <span className="font-normal text-zinc-500">
+                  {completeEntry.title}
+                </span>
+              </h3>
+              <button
+                onClick={closeCompleteModal}
+                className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 text-xl px-1"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto overscroll-contain px-5 space-y-4">
+              {/* Duration field — cardio only. Pre-filled with the planned
+                  duration; user can adjust to actual time spent. */}
+              {completeEntry.source === "cardio" && (
+                <div className="flex items-center gap-2">
+                  <label className="text-xs font-medium text-zinc-500">
+                    Actual duration
+                  </label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    value={cDuration}
+                    onChange={(e) => setCDuration(e.target.value)}
+                    className="w-16 text-sm px-2 py-1 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                  />
+                  <span className="text-xs text-zinc-500">min</span>
+                </div>
+              )}
+
+              <IntensityPicker
+                value={cIntensity}
+                onChange={setCIntensity}
+                label="Confirm intensity"
+              />
+
+              {/* Notes — everything but cardio benefits from notes; cardio
+                  gets them too for consistency with the rest of the app. */}
+              <div>
+                <label className="text-xs font-medium text-zinc-500 mb-1.5 block">
+                  Notes
+                </label>
+                <textarea
+                  value={cNotes}
+                  onChange={(e) => setCNotes(e.target.value)}
+                  placeholder={
+                    completeEntry.source === "ma_planned"
+                      ? "How did the class go? Use #tags to group topics."
+                      : "Anything worth remembering (optional)."
+                  }
+                  rows={3}
+                  className="w-full text-sm p-2 rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950"
+                />
+              </div>
+
+              <div className="h-4" />
+            </div>
+
+            <div className="flex-shrink-0 p-5 pt-3 border-t border-zinc-200 dark:border-zinc-800">
+              <button
+                onClick={handleCompleteSubmit}
+                disabled={submittingComplete}
+                className="w-full py-2.5 rounded-xl bg-indigo-600 text-white font-semibold text-sm disabled:opacity-50"
+              >
+                {submittingComplete ? "Saving…" : "✓ Mark complete"}
               </button>
             </div>
           </div>
