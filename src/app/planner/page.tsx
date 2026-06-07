@@ -15,7 +15,7 @@
 // (with confirm), but edits flow back to the originating page.
 // ============================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import {
@@ -137,6 +137,12 @@ function classesForSlot(date: string, slot: DayPart): GymClass[] {
 /** Common Zone 2 cardio activities — used as quick-pick buttons. */
 const CARDIO_PRESETS = ["Walking", "Jogging", "Biking"];
 
+/** Returns index 0–6 (Mon=0 ... Sun=6) for today. */
+function todayDayIndex(): number {
+  const d = new Date().getDay();
+  return d === 0 ? 6 : d - 1;
+}
+
 type AddTarget = { date: string; dayPart: DayPart };
 
 export default function PlannerPage() {
@@ -144,6 +150,18 @@ export default function PlannerPage() {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Carousel state: which day card is currently focused (Mon=0 ... Sun=6).
+  // Defaults to today when viewing the current week.
+  const [selectedDayIdx, setSelectedDayIdx] = useState<number>(() =>
+    todayDayIndex()
+  );
+  // Ref to the horizontally scrollable day-card container so day-tab
+  // taps can programmatically scrollTo() into view.
+  const dayScrollerRef = useRef<HTMLDivElement | null>(null);
+  // Suppress scroll-driven selection updates while we're animating a
+  // programmatic scroll, so the tab tap doesn't fight the snap settle.
+  const isProgrammaticScrollRef = useRef(false);
 
   // Add-entry form state — null when no form is open.
   const [addTarget, setAddTarget] = useState<AddTarget | null>(null);
@@ -208,6 +226,29 @@ export default function PlannerPage() {
   useEffect(() => {
     loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [weekStart]);
+
+  /** Scroll the day-card carousel so the given day index is centered. */
+  function scrollToDay(idx: number, behavior: ScrollBehavior = "smooth") {
+    const el = dayScrollerRef.current;
+    if (!el) return;
+    isProgrammaticScrollRef.current = true;
+    el.scrollTo({ left: idx * el.clientWidth, behavior });
+    // Re-enable scroll-driven updates after the animation settles.
+    setTimeout(() => {
+      isProgrammaticScrollRef.current = false;
+    }, 400);
+  }
+
+  // On week change, snap to today if we're on the current week, else Monday.
+  // Done instantly (auto) since the week itself just changed — a smooth
+  // scroll would be jarring on top of the swap.
+  useEffect(() => {
+    const target =
+      weekStart === startOfWeekLocal() ? todayDayIndex() : 0;
+    setSelectedDayIdx(target);
+    const id = setTimeout(() => scrollToDay(target, "auto"), 0);
+    return () => clearTimeout(id);
   }, [weekStart]);
 
   // Lock background body scroll while the add sheet is open so a finger
@@ -744,8 +785,69 @@ export default function PlannerPage() {
 
       {loading && <p className="text-xs text-zinc-500 mb-3">Loading…</p>}
 
-      {/* Day cards — one per day of the week */}
-      <div className="space-y-3">
+      {/* Day tabs — tap a day to jump the carousel below to it. Today is
+          highlighted; the dot under each tab marks days that have entries. */}
+      <div className="grid grid-cols-7 gap-1 mb-3">
+        {DAYS_LABEL.map((d, idx) => {
+          const date = addDays(weekStart, idx);
+          const isSelected = idx === selectedDayIdx;
+          const isToday = date === todayLocal();
+          const dayEntryCount = entries.filter((e) => e.date === date).length;
+          return (
+            <button
+              key={d.short}
+              onClick={() => {
+                setSelectedDayIdx(idx);
+                scrollToDay(idx);
+              }}
+              className={`flex flex-col items-center py-2 rounded-lg text-xs transition-colors ${
+                isSelected
+                  ? "bg-indigo-600 text-white font-semibold"
+                  : isToday
+                    ? "bg-indigo-100 dark:bg-indigo-900/30 text-indigo-800 dark:text-indigo-300 font-semibold"
+                    : "bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 border border-zinc-200 dark:border-zinc-800"
+              }`}
+            >
+              <span>{d.short}</span>
+              <span
+                className={`text-sm font-bold mt-0.5 ${
+                  isSelected ? "text-white" : ""
+                }`}
+              >
+                {date.split("-")[2]}
+              </span>
+              {dayEntryCount > 0 && (
+                <span
+                  className={`mt-0.5 inline-block w-1.5 h-1.5 rounded-full ${
+                    isSelected ? "bg-white" : "bg-indigo-500"
+                  }`}
+                  aria-label={`${dayEntryCount} entries`}
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Day cards — horizontal scroll-snap carousel. One day visible at a
+          time; swipe left/right between days. Each card width === container
+          width so snap-center lands cleanly. The container's -mx-6 cancels
+          out the page's px-6 so cards can be full viewport width. */}
+      <div
+        ref={dayScrollerRef}
+        onScroll={(e) => {
+          // Update which tab is highlighted as the user swipes.
+          // Skip while a programmatic scroll is in flight to avoid fight.
+          if (isProgrammaticScrollRef.current) return;
+          const el = e.currentTarget;
+          const w = el.clientWidth || 1;
+          const idx = Math.round(el.scrollLeft / w);
+          if (idx !== selectedDayIdx && idx >= 0 && idx < 7) {
+            setSelectedDayIdx(idx);
+          }
+        }}
+        className="-mx-6 flex overflow-x-auto snap-x snap-mandatory overscroll-x-contain scroll-smooth no-scrollbar"
+      >
         {DAYS_LABEL.map((d, idx) => {
           const date = addDays(weekStart, idx);
           const isToday = date === todayLocal();
@@ -753,15 +855,18 @@ export default function PlannerPage() {
           return (
             <section
               key={date}
-              className={`rounded-2xl border ${
-                isToday
-                  ? "bg-indigo-50/40 dark:bg-indigo-950/20 border-indigo-300 dark:border-indigo-800"
-                  : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800"
-              }`}
+              className="snap-center shrink-0 w-screen max-w-md mx-auto px-6"
             >
+              <div
+                className={`rounded-2xl border ${
+                  isToday
+                    ? "bg-indigo-50/40 dark:bg-indigo-950/20 border-indigo-300 dark:border-indigo-800"
+                    : "bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800"
+                }`}
+              >
               <header className="px-4 pt-3 pb-2 flex items-baseline justify-between">
                 <h2 className="font-bold">
-                  {d.short}
+                  {d.full}
                   <span className="ml-2 text-xs font-normal text-zinc-500">
                     {date.split("-")[2]}
                   </span>
@@ -851,6 +956,7 @@ export default function PlannerPage() {
                   </div>
                 );
               })}
+              </div>
             </section>
           );
         })}

@@ -18,7 +18,7 @@ export type GymClass = {
 
 /**
  * Disciplines our martial_arts_sessions table accepts. Classes outside
- * this set (e.g. Ashtanga Yoga, Open Mat) can be PLANNED but can't be
+ * this set (e.g. Ashtanga Yoga) can be PLANNED but can't be
  * quick-logged with "I went" because the DB check constraint would reject them.
  */
 export const TRACKABLE_DISCIPLINES = new Set([
@@ -94,7 +94,7 @@ export const GYM_SCHEDULE: Record<DayOfWeek, GymClass[]> = {
   ],
   Friday: [
     { start: "11:00", end: "12:00", name: "MMA", discipline: "MMA" },
-    { start: "12:00", end: "13:00", name: "Open Mat", discipline: "Grappling" },
+    { start: "12:00", end: "13:00", name: "Open Mat", discipline: "Sparring" },
     { start: "17:45", end: "18:45", name: "NoGi BJJ", discipline: "Grappling" },
     { start: "18:45", end: "19:45", name: "NoGi BJJ Rolling", discipline: "Grappling" },
     { start: "19:45", end: "21:00", name: "Los Lobos Wrestling", discipline: "Grappling" },
@@ -102,10 +102,10 @@ export const GYM_SCHEDULE: Record<DayOfWeek, GymClass[]> = {
   Saturday: [
     { start: "10:30", end: "11:30", name: "NoGi BJJ", discipline: "Grappling" },
     { start: "10:30", end: "11:30", name: "Kickboxing", discipline: "Kickboxing" },
-    { start: "11:30", end: "13:00", name: "Open Mat", discipline: "Grappling" },
+    { start: "11:30", end: "13:00", name: "Open Mat", discipline: "Sparring" },
   ],
   Sunday: [
-    { start: "11:30", end: "12:30", name: "Women & Nonbinary Open Mat", discipline: "Grappling" },
+    { start: "11:30", end: "12:30", name: "Women & Nonbinary Open Mat", discipline: "Sparring" },
     { start: "13:00", end: "14:00", name: "Gi BJJ", discipline: "Grappling" },
     { start: "14:00", end: "15:00", name: "NoGi BJJ", discipline: "Grappling" },
     { start: "15:00", end: "16:30", name: "Los Lobos Wrestling", discipline: "Grappling" },
