@@ -72,9 +72,13 @@ export default function HomePage() {
   async function loadWeekLifts() {
     const weekStart = startOfWeekLocal();
     const weekEnd = addDays(weekStart, 7);
+    // Only count lift_sessions that have at least one set logged. A
+    // session row exists with zero sets when the user "planned" a lift
+    // from the Planner page but hasn't trained yet — those shouldn't
+    // inflate the weekly count.
     const { data, error } = await supabase
       .from("lift_sessions")
-      .select("id, date, template_name, created_at")
+      .select("id, date, template_name, created_at, lift_sets(count)")
       .gte("date", weekStart)
       .lt("date", weekEnd)
       .order("created_at", { ascending: false });
@@ -82,24 +86,44 @@ export default function HomePage() {
       console.error("Failed to load lift sessions:", error.message);
       return;
     }
-    setWeekLifts(data ?? []);
+    type RowWithSets = LiftSession & { lift_sets: { count: number }[] };
+    const rows = (data ?? []) as RowWithSets[];
+    const completed = rows.filter((r) => (r.lift_sets?.[0]?.count ?? 0) > 0);
+    setWeekLifts(completed);
   }
 
   async function loadWeekCardio() {
     const weekStart = startOfWeekLocal();
     const weekEnd = addDays(weekStart, 7);
+    // Only count cardio that's been checked off as completed
+    // (completed_at IS NOT NULL). Same reasoning as lifts above:
+    // planning-not-doing shouldn't move the goal needle.
     const { data, error } = await supabase
       .from("cardio_sessions")
-      .select("id, date, activity, duration_min")
+      .select("id, date, activity, duration_min, completed_at")
       .gte("date", weekStart)
       .lt("date", weekEnd);
     if (error) {
-      // Table might not exist yet (migration not run). Treat as empty.
+      // Tolerate the case where the completed_at column doesn't exist
+      // yet (older deployments / migration not run) — fall back to
+      // the un-filtered query so the user still sees their data.
+      if (/completed_at/i.test(error.message ?? "")) {
+        const retry = await supabase
+          .from("cardio_sessions")
+          .select("id, date, activity, duration_min")
+          .gte("date", weekStart)
+          .lt("date", weekEnd);
+        setWeekCardio(retry.data ?? []);
+        return;
+      }
       console.warn("Cardio load skipped:", error.message);
       setWeekCardio([]);
       return;
     }
-    setWeekCardio(data ?? []);
+    type RowWithCompleted = CardioSession & { completed_at: string | null };
+    const rows = (data ?? []) as RowWithCompleted[];
+    const completed = rows.filter((r) => r.completed_at != null);
+    setWeekCardio(completed);
   }
 
   // Cached AI summary for this week, loaded silently on mount.

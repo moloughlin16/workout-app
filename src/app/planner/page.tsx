@@ -252,13 +252,26 @@ export default function PlannerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [weekStart]);
 
-  /** Scroll the day-card carousel so the given day index is centered. */
+  /**
+   * Scroll the day-card carousel so the given day index is centered.
+   *
+   * Uses the child element's own `scrollIntoView` rather than computing
+   * `idx * clientWidth` — the latter accumulates off-by-one errors when
+   * card width and the scroller's `clientWidth` differ even slightly
+   * (e.g. iOS Safari viewport quirks, sub-pixel rounding). With
+   * scrollIntoView the browser positions the actual child precisely,
+   * regardless of geometry.
+   */
   function scrollToDay(idx: number, behavior: ScrollBehavior = "smooth") {
     const el = dayScrollerRef.current;
     if (!el) return;
+    const child = el.children[idx] as HTMLElement | undefined;
+    if (!child) return;
     isProgrammaticScrollRef.current = true;
-    el.scrollTo({ left: idx * el.clientWidth, behavior });
-    // Re-enable scroll-driven updates after the animation settles.
+    // `inline: "center"` aligns the child's center to the scroller's
+    // center — exactly matches `snap-center`. `block: "nearest"` keeps
+    // vertical scroll where it is.
+    child.scrollIntoView({ behavior, inline: "center", block: "nearest" });
     setTimeout(() => {
       isProgrammaticScrollRef.current = false;
     }, 400);
@@ -713,9 +726,12 @@ export default function PlannerPage() {
   function openCheck(entry: Entry) {
     if (entry.isCompleted) return; // unchecking not supported in v1
     if (entry.source === "lift") {
-      // Take the user to /lift; the empty session is at the top of
-      // Recent Sessions there for them to open and enter sets.
-      router.push("/lift");
+      // Take the user to /lift with a session-id query param. The lift
+      // page reads this on mount and auto-opens that session in the
+      // edit view (seeded with the template's exercises if no sets
+      // were logged yet).
+      const realId = entry.id.split("-").slice(1).join("-");
+      router.push(`/lift?session=${realId}`);
       return;
     }
     if (
@@ -1035,13 +1051,29 @@ export default function PlannerPage() {
         ref={dayScrollerRef}
         onScroll={(e) => {
           // Update which tab is highlighted as the user swipes.
-          // Skip while a programmatic scroll is in flight to avoid fight.
+          // Skip while a programmatic scroll is in flight (otherwise the
+          // settling animation can re-fire this and overshoot).
           if (isProgrammaticScrollRef.current) return;
           const el = e.currentTarget;
-          const w = el.clientWidth || 1;
-          const idx = Math.round(el.scrollLeft / w);
-          if (idx !== selectedDayIdx && idx >= 0 && idx < 7) {
-            setSelectedDayIdx(idx);
+          // Find the child whose center is closest to the scroller's
+          // viewport center. Iterating children is more accurate than
+          // `Math.round(scrollLeft / clientWidth)` when card width and
+          // clientWidth differ by even a pixel (iOS viewport quirks
+          // were causing Fri/Sat to be reported as Sat/Sun).
+          const centerX = el.scrollLeft + el.clientWidth / 2;
+          let bestIdx = 0;
+          let bestDist = Infinity;
+          for (let i = 0; i < el.children.length; i++) {
+            const child = el.children[i] as HTMLElement;
+            const childCenter = child.offsetLeft + child.offsetWidth / 2;
+            const d = Math.abs(centerX - childCenter);
+            if (d < bestDist) {
+              bestDist = d;
+              bestIdx = i;
+            }
+          }
+          if (bestIdx !== selectedDayIdx) {
+            setSelectedDayIdx(bestIdx);
           }
         }}
         className="-mx-6 flex overflow-x-auto snap-x snap-mandatory overscroll-x-contain scroll-smooth no-scrollbar"

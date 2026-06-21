@@ -339,6 +339,36 @@ export default function LiftPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // If the user navigated here from the Planner (e.g. tapped a lift's
+  // checkbox), the URL carries a ?session=<id> param. Fetch that
+  // session and open it in the edit view automatically. Runs once on
+  // mount; safe in this client component since we wait for useEffect.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get("session");
+    if (!sessionId) return;
+    (async () => {
+      const { data, error } = await supabase
+        .from("lift_sessions")
+        .select("id, date, template_name, notes, mood, intensity, created_at")
+        .eq("id", sessionId)
+        .single();
+      if (error || !data) {
+        console.warn("Auto-open session failed:", error?.message);
+        return;
+      }
+      // PastSession also carries set_count, but startEditing only reads
+      // notes/mood/intensity/template_name/id — populating with 0 is fine.
+      startEditing({ ...data, set_count: 0 } as PastSession);
+      // Clear the query param from the URL so a refresh doesn't reopen
+      // the same session over and over.
+      const url = new URL(window.location.href);
+      url.searchParams.delete("session");
+      window.history.replaceState({}, "", url.toString());
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Persist the active workout on every relevant state change. Cheap to
   // run on each keystroke — localStorage writes are sync but tiny.
   useEffect(() => {
@@ -975,9 +1005,28 @@ export default function LiftPage() {
       }
     }
 
-    const groups: EditExerciseGroup[] = Array.from(groupsMap.entries()).map(
+    let groups: EditExerciseGroup[] = Array.from(groupsMap.entries()).map(
       ([name, sets]) => ({ name, sets })
     );
+
+    // No saved sets yet (likely a "planned" lift created from the
+    // Planner). Seed the editor with the template's exercise list so
+    // the user sees a workout ready to fill in instead of an empty
+    // page. Each exercise gets `targetSets` blank rows. If the saved
+    // template_name doesn't match any TEMPLATES entry we leave groups
+    // empty — better than guessing.
+    if (groups.length === 0) {
+      const template = TEMPLATES.find((t) => t.name === session.template_name);
+      if (template) {
+        groups = template.exercises.map((ex) => ({
+          name: ex.name,
+          sets: Array.from({ length: ex.targetSets }, () => ({
+            weight: "",
+            reps: "",
+          })),
+        }));
+      }
+    }
 
     setEditGroups(groups);
     setEditNotes(session.notes ?? "");
